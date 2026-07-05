@@ -1,1 +1,496 @@
-zzz
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tune Studio</title>
+<style>
+  :root{
+    --bg:#f5f5f7;
+    --card:#ffffff;
+    --ink:#1d1d1f;
+    --ink-2:#6e6e73;
+    --line:rgba(0,0,0,.08);
+    --accent:#0071e3;
+    --accent-press:#0060c2;
+    --green:#34c759;
+    --radius:20px;
+    --code-bg:#1c1c1e;
+    --code-ink:#e8e8ed;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+  ::selection{background:rgba(0,113,227,.2)}
+
+  /* ---------- Header ---------- */
+  header{
+    position:sticky;top:0;z-index:50;
+    backdrop-filter:saturate(180%) blur(20px);
+    -webkit-backdrop-filter:saturate(180%) blur(20px);
+    background:rgba(251,251,253,.8);
+    border-bottom:1px solid var(--line);
+  }
+  .header-inner{
+    max-width:1080px;margin:0 auto;
+    padding:14px 24px 12px;
+    display:flex;flex-direction:column;gap:12px;align-items:center;
+  }
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand-mark{
+    width:30px;height:30px;border-radius:9px;
+    background:linear-gradient(135deg,#0a84ff,#5e5ce6);
+    display:grid;place-items:center;color:#fff;font-size:16px;
+    box-shadow:0 2px 8px rgba(10,132,255,.35);
+  }
+  .brand h1{font-size:19px;font-weight:600;letter-spacing:-.02em}
+  .brand span{color:var(--ink-2);font-weight:400}
+
+  /* ---------- Segmented control tabs ---------- */
+  .tabs{
+    position:relative;
+    display:flex;gap:2px;
+    background:rgba(118,118,128,.12);
+    border-radius:12px;padding:3px;
+    width:100%;max-width:640px;
+  }
+  .tab-btn{
+    flex:1;position:relative;z-index:2;
+    appearance:none;border:0;background:transparent;
+    font:inherit;font-size:14px;font-weight:500;color:var(--ink-2);
+    padding:9px 6px;border-radius:9px;cursor:pointer;
+    transition:color .25s ease;white-space:nowrap;
+  }
+  .tab-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .tab-btn[aria-selected="true"]{color:var(--ink);font-weight:600}
+  .tab-glider{
+    position:absolute;z-index:1;top:3px;bottom:3px;left:3px;
+    width:calc(25% - 3px);
+    background:var(--card);border-radius:9px;
+    box-shadow:0 3px 8px rgba(0,0,0,.12),0 1px 1px rgba(0,0,0,.04);
+    transition:transform .35s cubic-bezier(.32,.72,.28,1.06);
+  }
+  @media (prefers-reduced-motion:reduce){
+    .tab-glider{transition:none}
+    *{animation:none!important;transition:none!important}
+  }
+
+  /* ---------- Layout ---------- */
+  main{max-width:1080px;margin:0 auto;padding:28px 24px 80px}
+  .panel{display:none;animation:rise .4s cubic-bezier(.25,.7,.3,1)}
+  .panel.active{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .hero{ text-align:center;margin:14px auto 30px;max-width:560px}
+  .hero h2{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1.1}
+  .hero p{color:var(--ink-2);font-size:15px;margin-top:8px;line-height:1.5}
+
+  .card{
+    background:var(--card);border-radius:var(--radius);
+    box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+    padding:24px;
+  }
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:820px){.grid-2{grid-template-columns:1fr}}
+
+  .card h3{font-size:16px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;margin-bottom:14px}
+  .card h3 .dot{width:8px;height:8px;border-radius:50%}
+
+  /* ---------- Inputs & buttons ---------- */
+  .field-row{display:flex;gap:10px;max-width:640px;margin:0 auto}
+  input[type="text"],textarea{
+    width:100%;font:inherit;font-size:15px;color:var(--ink);
+    background:var(--card);
+    border:1px solid var(--line);border-radius:14px;
+    padding:13px 16px;
+    box-shadow:0 1px 2px rgba(0,0,0,.03);
+    transition:border-color .2s,box-shadow .2s;
+  }
+  input[type="text"]:focus,textarea:focus{
+    outline:none;border-color:var(--accent);
+    box-shadow:0 0 0 4px rgba(0,113,227,.15);
+  }
+  textarea{resize:vertical;min-height:110px;line-height:1.5}
+  .btn{
+    appearance:none;border:0;cursor:pointer;font:inherit;
+    font-size:15px;font-weight:500;color:#fff;
+    background:var(--accent);border-radius:14px;padding:13px 22px;
+    transition:background .2s,transform .1s;white-space:nowrap;
+  }
+  .btn:hover{background:var(--accent-press)}
+  .btn:active{transform:scale(.97)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-quiet{
+    display:inline-flex;align-items:center;gap:6px;
+    background:rgba(0,113,227,.1);color:var(--accent);
+    font-size:13px;font-weight:500;padding:8px 14px;border-radius:999px;
+    text-decoration:none;border:0;cursor:pointer;font-family:inherit;
+    transition:background .2s;
+  }
+  .btn-quiet:hover{background:rgba(0,113,227,.18)}
+
+  /* ---------- Chips & meta ---------- */
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 16px}
+  .chip{
+    background:rgba(118,118,128,.1);border-radius:999px;
+    font-size:12.5px;font-weight:500;color:var(--ink);
+    padding:6px 12px;
+  }
+  .chip b{color:var(--ink-2);font-weight:500;margin-right:4px}
+
+  .kv{display:grid;grid-template-columns:110px 1fr;row-gap:9px;column-gap:12px;font-size:14px}
+  .kv dt{color:var(--ink-2)}
+  .kv dd{font-weight:500}
+
+  /* ---------- Code blocks ---------- */
+  .codeblock{
+    position:relative;
+    background:var(--code-bg);color:var(--code-ink);
+    border-radius:16px;padding:18px;
+    font-family:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:13px;line-height:1.65;
+    overflow:auto;max-height:480px;white-space:pre-wrap;word-wrap:break-word;
+  }
+  .codeblock .cb-label{
+    position:sticky;top:0;float:right;
+    font-family:inherit;font-size:11px;color:#98989f;
+    background:rgba(60,60,67,.6);border-radius:6px;padding:3px 8px;
+    border:0;cursor:pointer;
+  }
+  .codeblock .cb-label:hover{color:#fff}
+  .traffic{display:flex;gap:6px;margin-bottom:12px}
+  .traffic i{width:11px;height:11px;border-radius:50%;display:block}
+  .traffic i:nth-child(1){background:#ff5f57}
+  .traffic i:nth-child(2){background:#febc2e}
+  .traffic i:nth-child(3){background:#28c840}
+
+  .structure-line .sec{color:#7dd3fc}
+  .structure-line .cm{color:#8e8e93}
+
+  /* ---------- Empty / loading / error ---------- */
+  .empty{
+    text-align:center;padding:48px 20px;color:var(--ink-2);font-size:14px;line-height:1.6;
+  }
+  .empty .glyph{font-size:40px;margin-bottom:12px;display:block}
+  .spinner{
+    width:22px;height:22px;border-radius:50%;
+    border:2.5px solid rgba(0,113,227,.2);border-top-color:var(--accent);
+    animation:spin .8s linear infinite;margin:0 auto 12px;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .error-note{
+    background:#fff2f2;border:1px solid rgba(255,59,48,.25);color:#c0392b;
+    border-radius:14px;padding:14px 16px;font-size:14px;line-height:1.5;margin-top:14px;
+  }
+  .info-note{
+    background:rgba(0,113,227,.06);border:1px solid rgba(0,113,227,.15);
+    border-radius:14px;padding:12px 16px;font-size:13px;color:var(--ink-2);
+    line-height:1.55;margin-top:14px;
+  }
+  .info-note a{color:var(--accent);text-decoration:none;font-weight:500}
+  .info-note a:hover{text-decoration:underline}
+
+  /* ---------- Embeds ---------- */
+  .embed-frame{
+    width:100%;aspect-ratio:16/9;border:0;border-radius:16px;
+    background:#000;display:block;
+  }
+  .embed-tall{aspect-ratio:auto;height:70vh;min-height:520px;background:#fff}
+  .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px}
+  .toolbar input{flex:1;min-width:220px}
+
+  .link-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+
+  footer{
+    max-width:1080px;margin:0 auto;padding:0 24px 40px;
+    color:var(--ink-2);font-size:12px;text-align:center;line-height:1.6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="brand">
+      <div class="brand-mark">♪</div>
+      <h1>Tune Studio <span>— search, listen, write</span></h1>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <div class="tab-glider" id="glider"></div>
+      <button class="tab-btn" role="tab" aria-selected="true"  aria-controls="panel-search"     id="tab-0">My Search</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-youtube"    id="tab-1">YouTube Playlist</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-songwriter" id="tab-2">Songwriter</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-suno"       id="tab-3">suno.ai</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ TAB 1 · MY SEARCH ============ -->
+  <section class="panel active" id="panel-search" role="tabpanel" aria-labelledby="tab-0">
+    <div class="hero">
+      <h2>Look up any song.</h2>
+      <p>Get the writers, the arrangement, the melody details — and quick links to the official lyrics.</p>
+    </div>
+
+    <div class="field-row">
+      <input type="text" id="searchInput" placeholder="Song title and artist — e.g. Bohemian Rhapsody, Queen" aria-label="Search for a song" />
+      <button class="btn" id="searchBtn">Search</button>
+    </div>
+
+    <div id="searchStatus"></div>
+
+    <div class="grid-2" id="searchResults" style="margin-top:26px;display:none">
+      <!-- Left: lyrics / structure code block -->
+      <div class="card">
+        <h3><span class="dot" style="background:#5e5ce6"></span> Lyrics &amp; Song Structure</h3>
+        <div class="codeblock" id="lyricsBlock">
+          <button class="cb-label" onclick="copyBlock('lyricsBlock', this)">Copy</button>
+          <div class="traffic"><i></i><i></i><i></i></div><span id="lyricsText"></span>
+        </div>
+        <div class="link-row" id="lyricsLinks"></div>
+        <div class="info-note">Full lyrics are licensed material, so this app shows the song map and links you to an official lyrics source instead of reprinting them.</div>
+      </div>
+
+      <!-- Right: melody, notes, artist details -->
+      <div class="card">
+        <h3><span class="dot" style="background:#34c759"></span> Melody, Notes &amp; Artist Details</h3>
+        <div class="chips" id="melodyChips"></div>
+        <div class="codeblock" id="melodyBlock" style="max-height:220px;margin-bottom:18px">
+          <button class="cb-label" onclick="copyBlock('melodyBlock', this)">Copy</button>
+          <div class="traffic"><i></i><i></i><i></i></div><span id="melodyText"></span>
+        </div>
+        <dl class="kv" id="artistDetails"></dl>
+      </div>
+    </div>
+
+    <div class="empty" id="searchEmpty">
+      <span class="glyph">🎧</span>
+      Search for any song to see how it's built — key, tempo, chords, structure, and who made it.
+    </div>
+  </section>
+
+  <!-- ============ TAB 2 · YOUTUBE PLAYLIST ============ -->
+  <section class="panel" id="panel-youtube" role="tabpanel" aria-labelledby="tab-1">
+    <div class="hero">
+      <h2>Your playlist, right here.</h2>
+      <p>Paste a YouTube playlist link once and it stays embedded below.</p>
+    </div>
+    <div class="card">
+      <div class="toolbar">
+        <input type="text" id="ytInput" placeholder="Paste your YouTube playlist link or ID…" aria-label="YouTube playlist link" />
+        <button class="btn" id="ytLoadBtn">Load Playlist</button>
+      </div>
+      <!-- Default: replace the list ID below with your own playlist ID to make it permanent -->
+      <iframe class="embed-frame" id="ytFrame"
+        src="https://www.youtube.com/embed/videoseries?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI"
+        title="YouTube playlist"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen></iframe>
+      <div class="info-note">To hard-wire your playlist, open this file and replace the <b>list=…</b> ID in the iframe with your playlist's ID (everything after <code>list=</code> in its URL).</div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 3 · SONGWRITER ============ -->
+  <section class="panel" id="panel-songwriter" role="tabpanel" aria-labelledby="tab-2">
+    <div class="hero">
+      <h2>Write something new.</h2>
+      <p>Describe the song you want — mood, genre, story, style — and the AI drafts original lyrics for you.</p>
+    </div>
+    <div class="card" style="max-width:760px;margin:0 auto">
+      <textarea id="swInput" placeholder="e.g. An upbeat country song about driving home on a Friday night, with a big singalong chorus…" aria-label="Describe your song"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+        <button class="btn" id="swBtn">✍️&nbsp; Write My Song</button>
+      </div>
+      <div id="swStatus"></div>
+      <div id="swResult" style="display:none;margin-top:20px">
+        <div class="codeblock" id="swBlock">
+          <button class="cb-label" onclick="copyBlock('swBlock', this)">Copy</button>
+          <div class="traffic"><i></i><i></i><i></i></div><span id="swText"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 4 · SUNO.AI ============ -->
+  <section class="panel" id="panel-suno" role="tabpanel" aria-labelledby="tab-3">
+    <div class="hero">
+      <h2>Turn lyrics into music.</h2>
+      <p>Browse Suno's Discover feed, or open it full-screen to generate a track from your Songwriter lyrics.</p>
+    </div>
+    <div class="card">
+      <div class="toolbar" style="justify-content:flex-end">
+        <a class="btn" href="https://suno.com/discover?homeNav=1" target="_blank" rel="noopener" style="text-decoration:none">Open Suno in a New Tab ↗</a>
+      </div>
+      <iframe class="embed-frame embed-tall" id="sunoFrame"
+        src="https://suno.com/discover?homeNav=1"
+        title="Suno Discover"></iframe>
+      <div class="info-note">If the panel above stays blank, Suno is blocking embedding in its site settings — use the <b>Open Suno in a New Tab</b> button instead.</div>
+    </div>
+  </section>
+
+</main>
+
+<footer>Tune Studio · Made for music lovers · Song data is AI-generated — double-check credits before publishing anything.</footer>
+
+<script>
+/* ================= Tabs ================= */
+const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+const panels = Array.from(document.querySelectorAll('.panel'));
+const glider = document.getElementById('glider');
+function selectTab(i){
+  tabs.forEach((t,idx)=>t.setAttribute('aria-selected', idx===i ? 'true':'false'));
+  panels.forEach((p,idx)=>p.classList.toggle('active', idx===i));
+  glider.style.transform = 'translateX(' + (i*100) + '%)';
+}
+tabs.forEach((t,i)=>t.addEventListener('click',()=>selectTab(i)));
+
+/* ================= Helpers ================= */
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function copyBlock(id, btn){
+  const text = document.getElementById(id).innerText.replace(/^Copy\n?/,'');
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent='Copied ✓'; setTimeout(()=>btn.textContent='Copy',1600);
+  });
+}
+function spinner(msg){return '<div class="empty"><div class="spinner"></div>'+esc(msg)+'</div>';}
+function errorNote(msg){return '<div class="error-note">'+msg+'</div>';}
+
+async function askClaude(prompt, maxTokens){
+  const res = await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      model:"claude-sonnet-4-6",
+      max_tokens:maxTokens||1000,
+      messages:[{role:"user",content:prompt}]
+    })
+  });
+  if(!res.ok) throw new Error("API returned " + res.status);
+  const data = await res.json();
+  return (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+}
+
+/* ================= Tab 1 · My Search ================= */
+const searchBtn = document.getElementById('searchBtn');
+const searchInput = document.getElementById('searchInput');
+searchInput.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch();});
+searchBtn.addEventListener('click',doSearch);
+
+async function doSearch(){
+  const q = searchInput.value.trim();
+  if(!q) return;
+  const status = document.getElementById('searchStatus');
+  document.getElementById('searchEmpty').style.display='none';
+  document.getElementById('searchResults').style.display='none';
+  status.innerHTML = spinner('Looking up "'+q+'"…');
+  searchBtn.disabled = true;
+
+  const prompt =
+    'You are a music-metadata service. For the song "'+q+'", respond with ONLY a raw JSON object, no markdown fences, no commentary, using exactly these keys: ' +
+    '{"title":"","artist":"","writers":[],"producers":[],"released":"","album":"","genre":"","key":"","tempo":"","timeSignature":"","chordProgression":"","melodyNotes":"2-3 sentences describing the melody and vocal arrangement","structure":[{"section":"Intro","description":"one short line about what happens musically"}],"funFact":""} ' +
+    'Do NOT include any actual song lyrics anywhere. If you are not confident the song exists, set title to "UNKNOWN".';
+
+  try{
+    let raw = await askClaude(prompt, 1200);
+    raw = raw.replace(/```json|```/g,'').trim();
+    const s = JSON.parse(raw);
+    if(!s.title || s.title==='UNKNOWN') throw new Error('notfound');
+    renderSong(s, q);
+    status.innerHTML='';
+  }catch(err){
+    if(err.message==='notfound'){
+      status.innerHTML = errorNote("Couldn't confidently identify that song. Try adding the artist's name, e.g. <b>“Yesterday, The Beatles”</b>.");
+    }else{
+      status.innerHTML = errorNote("The AI lookup isn't reachable right now (this feature needs the app to be running inside Claude, or connected to an AI backend). You can still use the links below.<div class='link-row' style='margin-top:10px'><a class='btn-quiet' target='_blank' rel='noopener' href='https://genius.com/search?q="+encodeURIComponent(q)+"'>Search lyrics on Genius ↗</a><a class='btn-quiet' target='_blank' rel='noopener' href='https://www.google.com/search?q="+encodeURIComponent(q+' lyrics')+"'>Google it ↗</a></div>");
+    }
+  }finally{
+    searchBtn.disabled=false;
+  }
+}
+
+function renderSong(s, q){
+  // Left block: structure map (no copyrighted lyrics)
+  let map = '// '+esc(s.title)+' — '+esc(s.artist)+'\n// Song structure map\n\n';
+  (s.structure||[]).forEach(sec=>{
+    map += '[' + esc(sec.section).toUpperCase() + ']\n  ' + esc(sec.description||'') + '\n\n';
+  });
+  document.getElementById('lyricsText').innerHTML = map;
+
+  const gq = encodeURIComponent((s.title||q)+' '+(s.artist||''));
+  document.getElementById('lyricsLinks').innerHTML =
+    '<a class="btn-quiet" target="_blank" rel="noopener" href="https://genius.com/search?q='+gq+'">Official lyrics on Genius ↗</a>'+
+    '<a class="btn-quiet" target="_blank" rel="noopener" href="https://www.youtube.com/results?search_query='+gq+'">Listen on YouTube ↗</a>';
+
+  // Right block: melody chips + notes + artist details
+  const chips = [];
+  if(s.key) chips.push('<span class="chip"><b>Key</b>'+esc(s.key)+'</span>');
+  if(s.tempo) chips.push('<span class="chip"><b>Tempo</b>'+esc(s.tempo)+'</span>');
+  if(s.timeSignature) chips.push('<span class="chip"><b>Time</b>'+esc(s.timeSignature)+'</span>');
+  if(s.genre) chips.push('<span class="chip"><b>Genre</b>'+esc(s.genre)+'</span>');
+  document.getElementById('melodyChips').innerHTML = chips.join('');
+
+  let mel = '// Melody & arrangement\n';
+  if(s.chordProgression) mel += 'Chords: '+esc(s.chordProgression)+'\n\n';
+  mel += esc(s.melodyNotes||'');
+  document.getElementById('melodyText').innerHTML = mel;
+
+  const kv = [];
+  const add=(k,v)=>{ if(v&&String(v).length) kv.push('<dt>'+k+'</dt><dd>'+esc(Array.isArray(v)?v.join(', '):v)+'</dd>'); };
+  add('Performed by', s.artist);
+  add('Written by', s.writers);
+  add('Produced by', s.producers);
+  add('Album', s.album);
+  add('Released', s.released);
+  add('Fun fact', s.funFact);
+  document.getElementById('artistDetails').innerHTML = kv.join('');
+
+  document.getElementById('searchResults').style.display='grid';
+}
+
+/* ================= Tab 2 · YouTube ================= */
+document.getElementById('ytLoadBtn').addEventListener('click', ()=>{
+  const v = document.getElementById('ytInput').value.trim();
+  if(!v) return;
+  let id = v;
+  const m = v.match(/[?&]list=([^&]+)/);
+  if(m) id = m[1];
+  document.getElementById('ytFrame').src = 'https://www.youtube.com/embed/videoseries?list='+encodeURIComponent(id);
+});
+
+/* ================= Tab 3 · Songwriter ================= */
+document.getElementById('swBtn').addEventListener('click', writeSong);
+async function writeSong(){
+  const req = document.getElementById('swInput').value.trim();
+  const status = document.getElementById('swStatus');
+  const btn = document.getElementById('swBtn');
+  if(!req){ status.innerHTML = errorNote('Describe your song first — mood, genre, or the story you want to tell.'); return; }
+  status.innerHTML = spinner('Writing your song…');
+  document.getElementById('swResult').style.display='none';
+  btn.disabled = true;
+  try{
+    const out = await askClaude(
+      'You are a professional songwriter. Write completely ORIGINAL song lyrics (do not copy or closely imitate any existing song) based on this request:\n\n"'+req+'"\n\n'+
+      'Format the output plainly with section labels in brackets like [Verse 1], [Chorus], [Bridge]. Start with a suggested TITLE: line and a STYLE: line (genre/tempo/vibe suitable to paste into a music generator), then the lyrics. No other commentary.',
+      1500
+    );
+    document.getElementById('swText').textContent = out.trim();
+    document.getElementById('swResult').style.display='block';
+    status.innerHTML='';
+  }catch(err){
+    status.innerHTML = errorNote("The AI songwriter isn't reachable right now. This feature works when the page runs inside Claude or is connected to an AI backend (an API key + a small server, or a service like Suno itself).");
+  }finally{
+    btn.disabled=false;
+  }
+}
+</script>
+</body>
+</html>
