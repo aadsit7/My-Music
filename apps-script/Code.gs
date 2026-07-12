@@ -388,15 +388,22 @@ function parseTranscription(raw, knownLyrics) {
     var el = arr[i];
     if (!el || typeof el !== 'object') return null;
     var t = Number(el.startSeconds);
-    var line = String(el.text === undefined || el.text === null ? '' : el.text).replace(/\s+/g, ' ').trim();
+    if (typeof el.text !== 'string' && typeof el.text !== 'number') return null;
+    var line = String(el.text).replace(/\s+/g, ' ').trim();
     if (!isFinite(t) || t < 0 || !line) return null;
     out.push({ startSeconds: Math.round(t * 10) / 10, text: line.slice(0, 200) });
   }
   // Times must never go backwards; ties (two lines rounded to the same tenth)
-  // get nudged forward so the result is strictly ascending.
+  // get nudged forward so the result is strictly ascending. The backwards
+  // check compares against the time the AI actually sent (prevRaw), not the
+  // nudged value — otherwise three lines stamped 10.0/10.0/10.0 (a legal
+  // non-decreasing reply) would be rejected once the second one is nudged.
+  var prevRaw = out.length ? out[0].startSeconds : 0;
   for (var k = 1; k < out.length; k++) {
-    if (out[k].startSeconds < out[k - 1].startSeconds) return null;
+    var raw = out[k].startSeconds;
+    if (raw < prevRaw) return null;
     if (out[k].startSeconds <= out[k - 1].startSeconds) out[k].startSeconds = Math.round((out[k - 1].startSeconds + 0.1) * 10) / 10;
+    prevRaw = raw;
   }
   if (knownLyrics.length && out.length !== knownLyrics.length) return null;
   return out;
@@ -518,8 +525,14 @@ function handleListVideos() {
 }
 
 function getOrCreateVideosFolder() {
+  // getFoldersByName also returns folders sitting in the trash — if the owner
+  // deleted "Tune Studio Videos", saving into that match would file videos in
+  // the trash (gone for good once it empties). Skip trashed matches.
   var it = DriveApp.getFoldersByName(VIDEOS_FOLDER_NAME);
-  if (it.hasNext()) return it.next();
+  while (it.hasNext()) {
+    var folder = it.next();
+    if (!folder.isTrashed()) return folder;
+  }
   return DriveApp.createFolder(VIDEOS_FOLDER_NAME);
 }
 
