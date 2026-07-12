@@ -110,7 +110,24 @@ needs touching for app changes.
      as `<Title> - Lyric Video.webm` (illegal characters sanitized), then
      shows size / duration / resolution, keeps a "Download again" button until
      a different song is loaded, and warns when the file is over 35 MB (too
-     big for the planned Drive auto-save).
+     big for the Drive auto-save — the warning tells the owner to drag the
+     downloaded file into the Drive folder instead).
+   - **Save to Google Drive**: after a successful export, a "Save to Google
+     Drive" button (next to "Download again") sends `this.evExportBlob` to the
+     backend's `save_video`, which files it in a Drive folder named
+     **"Tune Studio Videos"** and logs a row on the Sheet's **"Videos"** tab
+     (Video ID, Song ID, Date Created, Caption Style, Drive Link, YouTube
+     Link, Notes, Title — folder and tab are auto-created). Optional YouTube
+     link + notes inputs feed the log. Upload uses `XMLHttpRequest` (not
+     fetch) purely for upload progress, written into `data-ev-save-pct` DOM
+     hooks; over 35 MB nothing is uploaded and a plain-English message points
+     at the manual drag-into-folder path. Success shows the Drive link;
+     failure keeps the app and the downloaded copy untouched and offers retry.
+     The loaded song's sheet ID rides along as `state.evSongId` ('' for
+     uploads).
+   - **My videos**: a card under the editor lists everything from the Videos
+     tab via `list_videos` (newest first) — title, date, caption style, and
+     Drive / YouTube links.
    - Export design notes (don't undo these — each fixes a real failure):
      - Frames are painted from the **audio clock**, never wall time, so
        captions can't drift on long recordings.
@@ -130,14 +147,25 @@ needs touching for app changes.
        It's a minimal EBML walk — on anything unexpected it returns the
        original blob, which still plays.
      - The finished `Blob` stays on the instance as `this.evExportBlob`,
-       details in `state.evExport` — **kept for the future Save-to-Drive
-       step** so it can upload without re-exporting.
+       details in `state.evExport` — that's what Save-to-Drive uploads, so no
+       re-export is ever needed.
 
-## Not built yet
+## The backend (Google Apps Script)
 
-- **Save to Drive**: a button that sends the finished export (already held
-  in `this.evExportBlob` + `state.evExport`) to Google Drive via the
-  backend. Nothing on the Apps Script side exists for it yet either.
+- The full script lives in `apps-script/Code.gs` (install/redeploy steps in
+  `apps-script/README.md`). The deployed copy runs in the owner's Google
+  account, bound to the "Tune Studio Database" sheet — changing the repo copy
+  does nothing until the owner pastes it into Apps Script and deploys a
+  **New version** on the existing deployment (same URL).
+- Request types: `status`, `ai_search`, `ai_write`, `original`,
+  `list_originals`, `update_original`, `delete_original`, `save_video`,
+  `list_videos`. Body `{ type, data, provider, token }` → `{ ok: true, … }`.
+- Song/video IDs (`MS-###` / `VID-###`) come from a forward-only counter in
+  Script properties, seeded from the highest ID in the sheet — deleting rows
+  can't cause duplicate IDs. Sheet writes go through `withLock`; the optional
+  `AI_TOKEN` script property gates every type except `status`.
+- Videos land in the Drive folder **"Tune Studio Videos"** and the Sheet tab
+  **"Videos"**; both are created automatically when missing.
 
 ## Testing notes
 
