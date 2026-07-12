@@ -122,10 +122,33 @@ needs touching for app changes.
      result. While the review screen is open, the audio `timeupdate`
      re-render is suppressed (like sync mode) so the reword box can't be
      wiped mid-typing by a re-render during spot-check playback.
-   - Caption styling: Classic / Bold / Karaoke / Fade, size, font, position,
-     text/background colors, contrast warning; live 16:9 canvas preview
-     painted every frame from the audio clock (`evRenderFrame` is the single
-     renderer shared by preview, thumbnails, and the video export).
+   - Caption styling: Classic / Bold / Karaoke / Fade / Anthem / Handwritten /
+     Neon, size, font, position, text/background colors, contrast warning;
+     live 16:9 canvas preview painted every frame from the audio clock
+     (`evRenderFrame` is the single renderer shared by preview, thumbnails,
+     and the video export). The three newer styles are canvas-drawn
+     animations, so they record into the export like everything else:
+     **Anthem** = huge all-caps that punches in with a quick scale-up on each
+     new line (canvas transform, 80%→100% in ~0.22 s); **Handwritten** = a
+     gentle ~0.7 s fade-in per line; **Neon** = a colored glow (canvas
+     shadowBlur in the text color) where words brighten one by one reusing
+     the karaoke word-spread timing.
+   - **Templates**: a "Templates" row at the top of the styling area
+     (`EV_TEMPLATES`) with three complete pre-designed looks — Anthem,
+     Handwritten, Neon — each shown as a live mini-canvas rendering "The
+     Quick Brown" in that template's own style/font/size/colors (painted by
+     `evRenderFrame`, like every other thumbnail). One tap applies the whole
+     bundle (style, size, font, text/background colors, position) by setting
+     the ordinary styling state — every manual control still works
+     afterwards. A subtle "Template: Anthem" badge sits next to the header
+     and switches to "(edited)" the moment any control differs from the
+     template's look (derived by comparison in `evTemplateState()`, never
+     stored, so it can't go stale). The picked template id rides along in the
+     same localStorage bundle as the other caption settings, so the last-used
+     look — template included — is the default for the next song.
+   - Flow hint: once lyrics are loaded but nothing is timed yet (and no
+     summary banner is up), one small line above the timing toolbar says
+     "Next: Auto-caption (AI) or tap Sync lyrics to time your captions."
    - **Video export**: records a 1920×1080 canvas (same renderer) + the song
      into a WebM (VP9→VP8→plain fallback) via `canvas.captureStream(30)` +
      Web Audio + `MediaRecorder`. No screen capture, no page UI in the file.
