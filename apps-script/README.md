@@ -13,6 +13,12 @@ writes) **plus**:
   show the song's name.
 - **`list_videos`** — returns everything on the Videos tab for the app's
   "My videos" list.
+- **`transcribe_audio`** — the Auto-caption feature: the app sends a song's
+  audio (up to ~13 MB — a 3-minute MP3 is ~4 MB) and Gemini returns timed
+  lyric lines. When the song's lyrics are already known they ride along and
+  Gemini only has to find *when* each line is sung, which is much more
+  accurate than guessing the words. Needs `GEMINI_API_KEY` in Script
+  properties. Bad AI output is retried once automatically.
 - **Collision-proof IDs** — song and video IDs now come from a counter that
   only ever counts up (stored in the script's own memory, seeded from the
   highest ID already in your sheet). Deleting a row can never cause a

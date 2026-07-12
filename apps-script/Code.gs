@@ -7,7 +7,9 @@
  *     in the app's Settings tab,
  *   · saves / lists / updates / deletes songs in the "My Songs" sheet tab,
  *   · saves exported lyric videos to the "Tune Studio Videos" Drive folder
- *     and logs them in the "Videos" sheet tab.
+ *     and logs them in the "Videos" sheet tab,
+ *   · auto-captions songs: listens to an uploaded audio file with Gemini and
+ *     returns timed lyric lines (transcribe_audio).
  *
  * Every request body looks like: { type, data, provider, token }
  * Every response looks like:     { ok: true, ... } or { ok: false, error }
@@ -43,6 +45,12 @@ var PROVIDER_KEY_NAMES = {
   grok:     ['GROK_API_KEY', 'XAI_API_KEY', 'GROK_KEY'],
   deepseek: ['DEEPSEEK_API_KEY', 'DEEPSEEK_KEY'],
 };
+
+// Auto-caption upload ceiling. Two limits stack here: Apps Script accepts a
+// POST of roughly 50 MB, but Gemini's inline-audio API only accepts ~20 MB of
+// total request. 18 MB of base64 (≈ 13 MB of audio — a 3-minute MP3 is ~4 MB)
+// stays safely under both while leaving room for the prompt and lyrics.
+var TRANSCRIBE_MAX_BASE64 = 18 * 1024 * 1024;
 
 // Model used when the Settings tab has no row for a provider.
 var DEFAULT_MODELS = {
@@ -95,6 +103,7 @@ function route(body) {
     case 'delete_original': return withLock(function () { return handleDeleteOriginal(data); });
     case 'save_video':      return withLock(function () { return handleSaveVideo(data); });
     case 'list_videos':     return handleListVideos();
+    case 'transcribe_audio': return handleTranscribeAudio(data);
     default:
       throw new Error('Unknown request type: ' + type);
   }
@@ -238,6 +247,159 @@ function aiFetch(url, options, label) {
   }
   if (!data) throw new Error('The ' + label + ' service sent back something unreadable — try again in a moment.');
   return data;
+}
+
+// ---------------------------------------------------------------- auto-caption (transcribe_audio)
+
+/**
+ * Listen to an uploaded song with Gemini and return timed caption lines:
+ * { ok: true, lines: [{ startSeconds, text }, …] }, times strictly ascending.
+ *
+ * Two modes:
+ *   · knownLyrics provided (song loaded from My songs / lyrics pasted): the
+ *     model only has to find WHEN each given line is sung — the words are
+ *     taken as gospel. This is the high-accuracy path.
+ *   · no knownLyrics (raw upload): the model transcribes the words too.
+ *
+ * Bad model output gets one retry with a blunt format reminder; if that also
+ * fails the app shows a plain-English error and points at tap-sync instead.
+ * Always uses Gemini (the only configured provider that listens to audio),
+ * regardless of the provider picked in the app's Settings.
+ */
+function handleTranscribeAudio(data) {
+  var audioBase64 = String(data.audioBase64 || '');
+  if (!audioBase64) throw new Error('No audio arrived — load the song’s audio and try Auto-caption again.');
+  if (audioBase64.length > TRANSCRIBE_MAX_BASE64) {
+    throw new Error('That audio file is too big to send for auto-captioning — the limit is about 13 MB, and a 3-minute MP3 is only around 4 MB. Try an MP3 version of the song (WAV files are much bigger), or tap the timings yourself with Sync lyrics.');
+  }
+  var key = getApiKey('gemini');
+  if (!key) throw new Error('Auto-caption needs a Gemini key — in the Apps Script editor open Project Settings → Script properties and add GEMINI_API_KEY.');
+
+  var mimeType = normalizeAudioMime(String(data.mimeType || ''));
+  var knownLyrics = knownLyricsLines(data.knownLyrics);
+  var settings = readSettings();
+  var model = settings.models.gemini || DEFAULT_MODELS.gemini;
+  var prompt = transcribePrompt(knownLyrics);
+
+  var raw = callGeminiAudio(key, model, prompt, audioBase64, mimeType);
+  var lines = parseTranscription(raw, knownLyrics);
+  if (!lines) {
+    // One retry with a blunt reminder — same one-shot style the app's other
+    // parse-the-AI's-JSON flows use.
+    var reminder = '\n\nREMINDER — YOUR PREVIOUS REPLY WAS NOT USABLE. Reply with ONLY a JSON array of objects like {"startSeconds": 12.4, "text": "one lyric line"}. startSeconds values MUST increase from one element to the next. No code fences, no commentary, no other fields, nothing before or after the array.'
+      + (knownLyrics.length ? ' The array MUST contain exactly ' + knownLyrics.length + ' elements — one per given lyric line, in the same order, with each "text" copied exactly.' : '');
+    raw = callGeminiAudio(key, model, prompt + reminder, audioBase64, mimeType);
+    lines = parseTranscription(raw, knownLyrics);
+  }
+  if (!lines) {
+    throw new Error('The AI couldn’t produce usable timings for this song — that happens sometimes with music. Try Auto-caption once more, or tap the timings yourself with Sync lyrics.');
+  }
+  if (!lines.length) {
+    throw new Error('The AI couldn’t hear any sung words in this audio. If the song definitely has vocals, try Auto-caption again — otherwise tap the timings yourself with Sync lyrics.');
+  }
+  return { ok: true, lines: lines };
+}
+
+// The app sends caption lines joined with newlines; normalize into an array.
+function knownLyricsLines(v) {
+  return String(v || '').split('\n').map(function (s) { return s.trim(); }).filter(String);
+}
+
+// Gemini's audio API is picky about MIME names (audio/mpeg → audio/mp3).
+function normalizeAudioMime(m) {
+  m = String(m || '').toLowerCase().split(';')[0].trim();
+  if (m === 'audio/mpeg' || m === 'audio/mp3' || m === '') return 'audio/mp3';
+  if (m === 'audio/x-wav' || m === 'audio/wave' || m === 'audio/wav') return 'audio/wav';
+  if (m === 'audio/aac' || m === 'audio/ogg' || m === 'audio/flac' || m === 'audio/aiff') return m;
+  return 'audio/mp3';
+}
+
+function transcribePrompt(knownLyrics) {
+  var head = [
+    'You are a precise song transcription and alignment engine. Listen to the attached audio from the very beginning.',
+    '',
+    'Reply with ONLY a JSON array — no markdown fences, no commentary before or after. Each element is one caption line:',
+    '  { "startSeconds": 12.4, "text": "one lyric line" }',
+    '',
+    'Rules:',
+    '- "startSeconds" is when that line STARTS being sung, in seconds from the very start of the audio, with one decimal place.',
+    '- startSeconds values MUST increase from one element to the next.',
+    '- Lyrics only: no section names like "Verse" or "Chorus", no speaker labels, no descriptions of instruments or sounds.',
+  ];
+  if (knownLyrics.length) {
+    return head.concat([
+      '',
+      'THE EXACT LYRICS ARE PROVIDED BELOW — one caption line per line, already in order. Do NOT transcribe, rewrite, merge, split, or skip anything. Your ONLY job is to find when each given line is sung.',
+      'The array MUST contain exactly ' + knownLyrics.length + ' elements — one per given line, in the same order, with each "text" copied EXACTLY as written below.',
+      'If a line repeats in the song, its element marks that line\'s position in THIS list (earlier list lines are sung earlier).',
+      '',
+      'LYRICS:',
+      knownLyrics.join('\n'),
+    ]).join('\n');
+  }
+  return head.concat([
+    '- Break the lyrics into natural caption-sized lines — one sung phrase per line, as a lyric video would show them.',
+    '- Skip pure instrumental passages. If the whole song has no sung words, reply [].',
+  ]).join('\n');
+}
+
+// Same shape as callGemini, plus the audio riding along as inline data. Asking
+// for application/json makes Gemini skip the chit-chat and code fences.
+function callGeminiAudio(key, model, prompt, audioBase64, mimeType) {
+  var payload = {
+    contents: [{ parts: [
+      { text: prompt },
+      { inline_data: { mime_type: mimeType, data: audioBase64 } },
+    ] }],
+    generationConfig: { maxOutputTokens: 8192, responseMimeType: 'application/json' },
+  };
+  var data = aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-goog-api-key': key },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  }, 'Gemini');
+  var cand = data.candidates && data.candidates[0];
+  var parts = ((cand && cand.content && cand.content.parts) || []).map(function (p) { return p.text || ''; }).filter(String);
+  if (!parts.length) throw new Error('Gemini sent back an empty answer — try Auto-caption again in a moment.');
+  return parts.join('\n');
+}
+
+/**
+ * Defensive parse of the model's reply. Returns a clean array of
+ * { startSeconds, text } with strictly ascending times, or null when the
+ * reply is unusable (which triggers the one-shot retry, then the error).
+ * With knownLyrics, the element count must match the given line count so the
+ * app can trust the one-to-one line mapping.
+ */
+function parseTranscription(raw, knownLyrics) {
+  var text = String(raw || '').trim();
+  // Strip ```json fences and anything outside the outermost [ … ].
+  text = text.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim();
+  var start = text.indexOf('[');
+  var end = text.lastIndexOf(']');
+  if (start === -1 || end <= start) return null;
+  var arr;
+  try { arr = JSON.parse(text.slice(start, end + 1)); } catch (e) { return null; }
+  if (!Array.isArray(arr) || arr.length > 500) return null;
+  var out = [];
+  for (var i = 0; i < arr.length; i++) {
+    var el = arr[i];
+    if (!el || typeof el !== 'object') return null;
+    var t = Number(el.startSeconds);
+    var line = String(el.text === undefined || el.text === null ? '' : el.text).replace(/\s+/g, ' ').trim();
+    if (!isFinite(t) || t < 0 || !line) return null;
+    out.push({ startSeconds: Math.round(t * 10) / 10, text: line.slice(0, 200) });
+  }
+  // Times must never go backwards; ties (two lines rounded to the same tenth)
+  // get nudged forward so the result is strictly ascending.
+  for (var k = 1; k < out.length; k++) {
+    if (out[k].startSeconds < out[k - 1].startSeconds) return null;
+    if (out[k].startSeconds <= out[k - 1].startSeconds) out[k].startSeconds = Math.round((out[k - 1].startSeconds + 0.1) * 10) / 10;
+  }
+  if (knownLyrics.length && out.length !== knownLyrics.length) return null;
+  return out;
 }
 
 // ---------------------------------------------------------------- songs (My Songs tab)
@@ -572,6 +734,7 @@ function TEST_backend() {
   var ready = [];
   for (var id in status.providers) if (status.providers[id]) ready.push(PROVIDER_LABELS[id]);
   report.push('AI providers with a key: ' + (ready.join(', ') || 'none — add API keys in Project Settings → Script properties'));
+  report.push('Auto-caption (needs the Gemini key): ' + (status.providers.gemini ? 'ready ✓' : 'NOT ready — add GEMINI_API_KEY in Project Settings → Script properties'));
   report.push('Access token (AI_TOKEN): ' + (status.tokenRequired ? 'required' : 'not set (optional)'));
 
   Logger.log('\n' + report.join('\n'));

@@ -98,6 +98,30 @@ needs touching for app changes.
    - Lyric lines are editable; `[Section]` headers never become captions.
    - Tap-along timing sync (full-screen view), per-line −/+ 0.1 s nudges,
      preview-from-line, re-sync from a line, save/load timing file.
+   - **Auto-caption (AI)**: sends the loaded audio to the backend's
+     `transcribe_audio` (Gemini listens to the song and returns timed lines).
+     Two paths: with existing lyrics (My songs / pasted) the caption lines
+     ride along as `knownLyrics` and the AI only aligns timings — the
+     high-accuracy path; at the paste step with no lyrics, an "Auto-caption"
+     option transcribes the words too. Audio is fetched to a local blob (same
+     as export, same CORS-link error) and sent as base64 — client cap 13 MB
+     raw, server cap 18 MB base64 (Gemini's inline-audio ceiling; a 3-min MP3
+     is ~4 MB, big WAVs get a plain-English "use an MP3" error).
+     **RULE — never bypass this: transcription results must ALWAYS pass
+     through the mandatory full-screen review screen.** There the owner
+     rewords lines, deletes junk lines, and plays any line from 2 s before
+     its stamp; only "Accept captions" applies them, "Discard" (with confirm)
+     leaves everything untouched. Accepted captions are ordinary timings —
+     nudges, re-sync-from-a-line, styles, preview, export and Drive save all
+     work unchanged — and the ascending-order guardrail is enforced at every
+     step (server parse, client receive, accept). When the AI aligned the
+     song's own lyrics one-to-one, review rows carry `srcIdx` back to their
+     `evItems` line, so accepting keeps `[Section]` headers and drops
+     review-deleted lines; transcribed rows replace the line list wholesale.
+     The tap-sync flow is untouched and remains the fallback for a bad AI
+     result. While the review screen is open, the audio `timeupdate`
+     re-render is suppressed (like sync mode) so the reword box can't be
+     wiped mid-typing by a re-render during spot-check playback.
    - Caption styling: Classic / Bold / Karaoke / Fade, size, font, position,
      text/background colors, contrast warning; live 16:9 canvas preview
      painted every frame from the audio clock (`evRenderFrame` is the single
@@ -159,7 +183,16 @@ needs touching for app changes.
   **New version** on the existing deployment (same URL).
 - Request types: `status`, `ai_search`, `ai_write`, `original`,
   `list_originals`, `update_original`, `delete_original`, `save_video`,
-  `list_videos`. Body `{ type, data, provider, token }` → `{ ok: true, … }`.
+  `list_videos`, `transcribe_audio`. Body `{ type, data, provider, token }` →
+  `{ ok: true, … }`.
+- `transcribe_audio` always uses Gemini (`GEMINI_API_KEY`) regardless of the
+  picked provider — it's the only configured provider wired for audio input.
+  It takes `{ audioBase64, mimeType, knownLyrics }`, asks for strict JSON
+  (`responseMimeType: application/json`), parses defensively
+  (`parseTranscription`: fences stripped, numbers validated, times must never
+  decrease, ties nudged +0.1 s, count must match `knownLyrics` when given)
+  and retries once with a blunt format reminder before giving up with a
+  plain-English error that points at tap-sync.
 - Song/video IDs (`MS-###` / `VID-###`) come from a forward-only counter in
   Script properties, seeded from the highest ID in the sheet — deleting rows
   can't cause duplicate IDs. Sheet writes go through `withLock`; the optional
