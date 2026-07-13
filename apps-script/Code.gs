@@ -53,13 +53,22 @@ var PROVIDER_KEY_NAMES = {
 var TRANSCRIBE_MAX_BASE64 = 18 * 1024 * 1024;
 
 // Model used when the Settings tab has no row for a provider.
+// Gemini uses Google's rolling "-latest" alias, which always points at the
+// newest stable Flash model — fixed model names get retired (gemini-2.5-flash
+// started returning 404 "no longer available" in mid-2026, which silently
+// broke Auto-caption until this was found).
 var DEFAULT_MODELS = {
   claude: 'claude-sonnet-4-6',
   openai: 'gpt-4o',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-flash-latest',
   grok: 'grok-4',
   deepseek: 'deepseek-chat',
 };
+
+// If the picked Gemini model name is ever rejected as unknown/retired, these
+// are tried next, in order, before giving up. Keeps Auto-caption (which can
+// only run on Gemini) working across Google's model retirements.
+var GEMINI_MODEL_FALLBACKS = ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-2.5-flash'];
 
 // ---------------------------------------------------------------- entry points
 
@@ -200,13 +209,7 @@ function callGemini(key, model, prompt, webResearch) {
     generationConfig: { maxOutputTokens: 8192 },
   };
   if (webResearch) payload.tools = [{ google_search: {} }];
-  var data = aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': key },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  }, 'Gemini');
+  var data = geminiGenerate(key, model, payload);
   var cand = data.candidates && data.candidates[0];
   var parts = ((cand && cand.content && cand.content.parts) || []).map(function (p) { return p.text || ''; }).filter(String);
   if (!parts.length) throw new Error('Gemini sent back an empty answer — try again in a moment.');
@@ -353,17 +356,40 @@ function callGeminiAudio(key, model, prompt, audioBase64, mimeType) {
     ] }],
     generationConfig: { maxOutputTokens: 8192, responseMimeType: 'application/json' },
   };
-  var data = aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': key },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  }, 'Gemini');
+  var data = geminiGenerate(key, model, payload);
   var cand = data.candidates && data.candidates[0];
   var parts = ((cand && cand.content && cand.content.parts) || []).map(function (p) { return p.text || ''; }).filter(String);
   if (!parts.length) throw new Error('Gemini sent back an empty answer — try Auto-caption again in a moment.');
   return parts.join('\n');
+}
+
+// One Gemini generateContent call, with model-retirement insurance: the picked
+// model is tried first; a 404 "unknown/no longer available model" answer moves
+// down GEMINI_MODEL_FALLBACKS instead of failing. Any other error (bad key,
+// quota, network) is real and is thrown straight away.
+function geminiGenerate(key, model, payload) {
+  var names = [model].concat(GEMINI_MODEL_FALLBACKS);
+  var tried = {};
+  var lastErr = null;
+  for (var i = 0; i < names.length; i++) {
+    var m = names[i];
+    if (!m || tried[m]) continue;
+    tried[m] = true;
+    try {
+      return aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-goog-api-key': key },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true,
+      }, 'Gemini');
+    } catch (err) {
+      var msg = String((err && err.message) || '');
+      if (msg.indexOf('(404)') === -1 || !/model/i.test(msg)) throw err;
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 /**

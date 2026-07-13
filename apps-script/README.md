@@ -23,6 +23,12 @@ writes) **plus**:
   only ever counts up (stored in the script's own memory, seeded from the
   highest ID already in your sheet). Deleting a row can never cause a
   duplicate ID again. All your existing IDs keep working unchanged.
+- **Model-retirement insurance for Gemini** — Google retired the fixed model
+  name the script used to call (`gemini-2.5-flash`), which broke Auto-caption
+  with a "no longer available" error. The script now asks for
+  `gemini-flash-latest` (Google's always-current name) and, if a model name
+  is ever rejected again, automatically tries the next known name instead of
+  failing. **You must redeploy for this fix to take effect** (see below).
 
 ## How to install it (step by step)
 

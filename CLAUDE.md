@@ -306,6 +306,13 @@ needs touching for app changes.
   `{ ok: true, … }`.
 - `transcribe_audio` always uses Gemini (`GEMINI_API_KEY`) regardless of the
   picked provider — it's the only configured provider wired for audio input.
+- Gemini's default model is the rolling alias `gemini-flash-latest` (fixed
+  names get retired — `gemini-2.5-flash` started 404ing "no longer available"
+  mid-2026 and silently broke Auto-caption). Every Gemini call goes through
+  `geminiGenerate`, which catches a 404 model-retirement answer and walks
+  `GEMINI_MODEL_FALLBACKS` before giving up; any other error (bad key, quota)
+  is thrown straight away. A model set on the sheet's Settings tab is still
+  tried first.
   It takes `{ audioBase64, mimeType, knownLyrics }`, asks for strict JSON
   (`responseMimeType: application/json`), parses defensively
   (`parseTranscription`: fences stripped, numbers validated, times must never
