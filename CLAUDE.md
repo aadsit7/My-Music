@@ -304,6 +304,17 @@ needs touching for app changes.
   `list_originals`, `update_original`, `delete_original`, `save_video`,
   `list_videos`, `transcribe_audio`. Body `{ type, data, provider, token }` →
   `{ ok: true, … }`.
+- `ai_write` wraps every request in `SONGWRITER_SYSTEM` (the "songwriter
+  brain": hit-quality craft rules plus the Suno output contract — TITLE: /
+  STYLE: lines and `[Section: vocal cue]` tags) unless the app already sent
+  its own copy of the contract (`promptCarriesContract`), and retries once
+  with a format reminder when the reply doesn't look like a song
+  (`looksLikeSong`). The owner restored this from an older "v8" script —
+  never drop it when editing Code.gs.
+- A model row on the sheet's Settings tab overrides `DEFAULT_MODELS` — a
+  stale "Gemini Model" value there (e.g. the retired `gemini-2.5-flash`) wins
+  over the code's default, so check the sheet first when a model error
+  persists after a redeploy.
 - `transcribe_audio` always uses Gemini (`GEMINI_API_KEY`) regardless of the
   picked provider — it's the only configured provider wired for audio input.
 - Gemini's default model is the rolling alias `gemini-flash-latest` (fixed
