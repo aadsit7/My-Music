@@ -134,6 +134,17 @@ needs touching for app changes.
      result. While the review screen is open, the audio `timeupdate`
      re-render is suppressed (like sync mode) so the reword box can't be
      wiped mid-typing by a re-render during spot-check playback.
+     **Auto-start**: captions kick off by themselves — `evMaybeAutoCaption`
+     runs when fresh audio becomes readable (one-shot `evAcAutoArm`, armed in
+     `evSetAudio`, fired from `loadedmetadata` a tick later) and again when
+     pasted lyrics land (`evLoadPasted` cancels a word-guessing run still in
+     flight via the job token and restarts on the high-accuracy path). It
+     bails when anything is already timed (loaded timing file / finished
+     sync) or the tab is busy (sync, export, tighten-timing, open review), so
+     it can never stomp work; both triggers are one-shot events, so a failed
+     or discarded run never loops — the Auto-caption button stays the manual
+     retry, and the mandatory review rule above applies to auto runs exactly
+     as to button presses.
    - **Background photo**: "Add a background photo" in the styling panel takes
      any picture (iPhone camera roll included — iOS hands HEIC over as JPEG);
      it's pre-cropped once into a 1920×1080 cover-fit canvas on the instance
