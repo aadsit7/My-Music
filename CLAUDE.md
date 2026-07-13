@@ -160,8 +160,28 @@ needs touching for app changes.
      **Anthem** = huge all-caps that punches in with a quick scale-up on each
      new line (canvas transform, 80%→100% in ~0.22 s); **Handwritten** = a
      gentle ~0.7 s fade-in per line; **Neon** = a colored glow (canvas
-     shadowBlur in the text color) where words brighten one by one reusing
-     the karaoke word-spread timing.
+     shadowBlur in the text color) reusing the karaoke wipe timing.
+   - **Karaoke experience** (Karaoke + Neon styles — the app's flagship, the
+     whole point is singing along): word-level timing doesn't exist, so each
+     word gets a share of its line weighted by word length, and the fill
+     sweeps left-to-right *through* each word (canvas clip-rect wipe) in the
+     **"Sung words turn" color** (`evHl`, own swatch row shown only for
+     these two styles, persisted with the look; when it equals the text
+     color the wipe falls back to brightness alone — that's the Neon
+     template's tube-warming look, and the contrast warning checks `evHl`
+     too). The **next line** shows small and dim under the current one
+     (always part of the block layout so nothing jumps), and gaps get a
+     **"get ready" display** (`evDrawNextUp`): the upcoming line dim plus
+     3·2·1 countdown dots in the final 3 s — before the first line and after
+     instrumental breaks. A line followed by a long gap (> its natural pace
+     + 4 s, `natural = 0.42 s × words + 0.6`) doesn't crawl across the
+     silence: it lights at natural pace, holds 1.8 s, fades out and hands
+     off to the get-ready display; lines in continuous singing keep their
+     full span exactly as before. All of it flows from `evSceneAt`'s fields
+     (`nextText`, `nextIn`, `span`) through `evRenderFrame`, so preview,
+     thumbnails and export can never disagree; scenes without `span` (style
+     thumbnails) fall back to plain `frac`. Other styles are untouched — no
+     preview line, no dots.
    - **Preview player**: the preview behaves like a phone video editor — tap
      the video itself to play/pause (a big play badge overlays while paused),
      drag the bar under it to jump anywhere (`evBindScrubber`: hand-bound
@@ -174,13 +194,14 @@ needs touching for app changes.
      scrolling the styling controls. The old standalone audio card now shows
      only outside the editor (paste step — `evShowMiniPlayer`).
    - **Templates**: a "Templates" row at the top of the styling area
-     (`EV_TEMPLATES`) with three complete pre-designed looks — Anthem,
-     Handwritten, Neon — each shown as a live mini-canvas rendering "The
-     Quick Brown" in that template's own style/font/size/colors (painted by
-     `evRenderFrame`, like every other thumbnail). One tap applies the whole
-     bundle (style, size, font, text/background colors, position) by setting
-     the ordinary styling state — every manual control still works
-     afterwards. A subtle "Template: Anthem" badge sits next to the header
+     (`EV_TEMPLATES`) with four complete pre-designed looks — Karaoke Night
+     (first, and the first-run default: white words turning warm yellow on
+     deep navy), Anthem, Handwritten, Neon — each shown as a live mini-canvas
+     rendering "The Quick Brown" in that template's own style/font/size/colors
+     (painted by `evRenderFrame`, like every other thumbnail). One tap applies
+     the whole bundle (style, size, font, text/highlight/background colors,
+     position) by setting the ordinary styling state — every manual control
+     still works afterwards. A subtle "Template: Anthem" badge sits next to the header
      and switches to "(edited)" the moment any control differs from the
      template's look (derived by comparison in `evTemplateState()`, never
      stored, so it can't go stale). The picked template id rides along in the
