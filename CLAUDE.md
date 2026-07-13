@@ -142,13 +142,36 @@ needs touching for app changes.
      dropped words), so the karaoke wipe keeps its length-weighted estimate.
      With no lyrics (paste step), `evWordsToRows` breaks Whisper's own words
      into caption-sized lines (gap > 1.2 s, ≥ 9 words, or sentence end).
-     Feature detection: no WebAssembly/Worker → plain-English "can't run on
-     this browser" + tap-sync pointer. **iPhone Safari is untested** in this
-     environment — the failure path is graceful, but test on a real iPhone.
+     Feature detection: no WebAssembly/Worker → with known lyrics we don't
+     need the model at all (see the no-AI onset fallback below); with none we
+     hand to the cloud AI. **iPhone Safari is untested** in this environment —
+     the failure path is graceful, but test on a real iPhone.
+     **NO-AI onset fallback (known lyrics) — the primary safety net now**:
+     when the on-device model can't run (old phone, out of memory) or matches
+     the lyrics poorly (align quality < 0.35 after the vocal-boost rescue),
+     and the words are already known (My songs / pasted), the app places the
+     lines from the song's own sound onsets instead of reaching for the cloud
+     — `evAcOnsetFallback` → `evDistributeToOnsets(known, onsets)`, which
+     spreads the lines between the first and last onset weighted by syllable
+     count (`evSyllableCount`) and snaps each onto the nearest onset (≤ 1.5 s)
+     that keeps the order. Reuses `evDetectOnsets` (the same pure Web Audio the
+     "Tighten timing" feature uses) — no model download, no network, works on
+     every phone, never fails. It's a deliberately rough first pass (verified
+     ~0.3 s line error on beat-marked test audio) that the owner refines in the
+     mandatory review, per-line nudges and Tighten timing. This is the fix for
+     "make Auto-caption work without relying on the online AI". Cloud is only
+     reached if even onset detection can't run (near-silent audio) or there are
+     no known lyrics to place.
      **Gemini demoted, not deleted**: the backend's `transcribe_audio` is
      never called on the default path. It survives as `evAutoCaptionCloud`,
-     offered ONLY as a "Try cloud captioning instead" button on the local
-     engine's failure card (`evAcCloudOffer`), with its old 13 MB cap.
+     offered as a "Try cloud captioning instead" button on the local engine's
+     failure card (`evAcCloudOffer`) and as the last-resort automatic fallback
+     when there are no known lyrics, with its old 13 MB cap. The backend's
+     `geminiGenerate` now retries a transient overload (503 "high demand", 429,
+     500) with exponential backoff and walks the fallback models if one stays
+     jammed (`isTransientGeminiError`, total-call budget), so the cloud backup
+     actually lands instead of dying on the first 503 — the reason it "never
+     worked" before.
      Both engines share `evAcBegin` (job token, busy card) / `evAcFinish`
      (guardrails, review) — a new `evAcBegin` also terminates any older
      worker BEFORE minting the new job token, so a superseded run can never
@@ -363,10 +386,15 @@ needs touching for app changes.
 - Gemini's default model is the rolling alias `gemini-flash-latest` (fixed
   names get retired — `gemini-2.5-flash` started 404ing "no longer available"
   mid-2026 and silently broke Auto-caption). Every Gemini call goes through
-  `geminiGenerate`, which catches a 404 model-retirement answer and walks
-  `GEMINI_MODEL_FALLBACKS` before giving up; any other error (bad key, quota)
-  is thrown straight away. A model set on the sheet's Settings tab is still
-  tried first.
+  `geminiGenerate`, which (a) catches a 404 model-retirement answer and walks
+  `GEMINI_MODEL_FALLBACKS`, and (b) retries a transient overload — 503 "high
+  demand", 429 rate-limit, 500 hiccup (`isTransientGeminiError`) — the SAME
+  model with exponential backoff (1 s, 2 s), then moves on to a fallback model
+  if it stays jammed, all under a total-call budget so the slow audio path
+  stays inside Apps Script's 6-minute limit; any other error (bad key, bad
+  request) is thrown straight away. This is what makes the cloud caption backup
+  actually land — before, a single 503 killed it. A model set on the sheet's
+  Settings tab is still tried first.
   It takes `{ audioBase64, mimeType, knownLyrics }`, asks for strict JSON
   (`responseMimeType: application/json`), parses defensively
   (`parseTranscription`: fences stripped, numbers validated, times must never

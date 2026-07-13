@@ -428,30 +428,59 @@ function callGeminiAudio(key, model, prompt, audioBase64, mimeType) {
   return parts.join('\n');
 }
 
-// One Gemini generateContent call, with model-retirement insurance: the picked
-// model is tried first; a 404 "unknown/no longer available model" answer moves
-// down GEMINI_MODEL_FALLBACKS instead of failing. Any other error (bad key,
-// quota, network) is real and is thrown straight away.
+// Is this Gemini error the temporary "try again in a moment" kind? The free
+// tier constantly answers 503 "this model is experiencing high demand", 429
+// (rate limit), or 500 (a transient hiccup) — every one of those clears on its
+// own within a second or two, so they're worth a short pause and a retry. A bad
+// key or a malformed request is NOT transient and must not be retried.
+function isTransientGeminiError(msg) {
+  msg = String(msg || '');
+  return /\((429|500|503)\)/.test(msg)
+    || /high demand|overloaded|unavailable|temporarily|try again|rate limit|resource[_ ]?exhausted/i.test(msg);
+}
+
+// One Gemini generateContent call, made resilient so Auto-caption's cloud backup
+// actually lands instead of dying on the first hiccup (the old version gave up
+// the moment Gemini said "503 high demand", which is why cloud captioning
+// "never worked"). Three kinds of trouble, handled three ways:
+//   · temporary overload / rate-limit (503 "high demand", 429, 500): wait and
+//     retry the SAME model with a growing pause (1s, then 2s); if it stays
+//     jammed, move on to the next fallback model rather than fail;
+//   · a 404 "unknown / no-longer-available model": walk down
+//     GEMINI_MODEL_FALLBACKS to a model that still exists;
+//   · anything else (bad key, malformed request): real — throw it straight away.
+// A total call budget keeps the slow audio path comfortably inside Apps
+// Script's 6-minute execution limit even if everything is having a bad day.
 function geminiGenerate(key, model, payload) {
   var names = [model].concat(GEMINI_MODEL_FALLBACKS);
   var tried = {};
   var lastErr = null;
-  for (var i = 0; i < names.length; i++) {
+  var calls = 0;
+  var MAX_CALLS = 5; // safety cap on total network calls (audio calls are slow)
+  for (var i = 0; i < names.length && calls < MAX_CALLS; i++) {
     var m = names[i];
     if (!m || tried[m]) continue;
     tried[m] = true;
-    try {
-      return aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
-        method: 'post',
-        contentType: 'application/json',
-        headers: { 'x-goog-api-key': key },
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true,
-      }, 'Gemini');
-    } catch (err) {
-      var msg = String((err && err.message) || '');
-      if (msg.indexOf('(404)') === -1 || !/model/i.test(msg)) throw err;
-      lastErr = err;
+    for (var attempt = 0; attempt < 3 && calls < MAX_CALLS; attempt++) {
+      calls++;
+      try {
+        return aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
+          method: 'post',
+          contentType: 'application/json',
+          headers: { 'x-goog-api-key': key },
+          payload: JSON.stringify(payload),
+          muteHttpExceptions: true,
+        }, 'Gemini');
+      } catch (err) {
+        var msg = String((err && err.message) || '');
+        lastErr = err;
+        if (isTransientGeminiError(msg)) {
+          if (attempt < 2 && calls < MAX_CALLS) { Utilities.sleep(1000 * Math.pow(2, attempt)); continue; }
+          break; // this model keeps overloading — try the next fallback model
+        }
+        if (msg.indexOf('(404)') !== -1 && /model/i.test(msg)) break; // retired model — next fallback
+        throw err; // bad key / malformed request — real, don't paper over it
+      }
     }
   }
   throw lastErr;
