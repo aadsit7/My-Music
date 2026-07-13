@@ -96,8 +96,20 @@ needs touching for app changes.
      a playable URL) or upload an MP3/WAV and paste lyrics. Audio never
      leaves the browser.
    - Lyric lines are editable; `[Section]` headers never become captions.
-   - Tap-along timing sync (full-screen view), per-line −/+ 0.1 s nudges,
-     preview-from-line, re-sync from a line, save/load timing file.
+   - Tap-along timing sync (full-screen view): live "x of y timed" counter,
+     stamped lines show ✓, the waiting line sits on a brand-soft pill.
+     **Back a line** (footer button, or Backspace/Z) un-stamps the last tap of
+     the current session only (`evSyncStartIdx` guards re-sync runs), puts the
+     highlight back and replays from 2.5 s before the bad stamp. Pausing turns
+     the big button into Resume, and any resume mid-sync rewinds 2 s first
+     (`evSyncTogglePause`, gated on `evSync` so the auto-caption review's
+     pause button is unaffected). Taps give a `navigator.vibrate` tick where
+     supported; hints never mention the keyboard on coarse-pointer devices.
+     Per-line −/+ 0.1 s nudges, plus an **"Every caption" − / + row**
+     (`evShiftAll`, shown once ≥2 lines are timed) that shifts every timed
+     line 0.1 s at once — the fix for "each tap landed a touch late" — blocked
+     with a plain-English note at 0:00 and the song's end. Preview-from-line,
+     re-sync from a line, save/load timing file.
    - **Auto-caption (AI)**: sends the loaded audio to the backend's
      `transcribe_audio` (Gemini listens to the song and returns timed lines).
      Two paths: with existing lyrics (My songs / pasted) the caption lines
