@@ -133,6 +133,17 @@ needs touching for app changes.
      gentle ~0.7 s fade-in per line; **Neon** = a colored glow (canvas
      shadowBlur in the text color) where words brighten one by one reusing
      the karaoke word-spread timing.
+   - **Preview player**: the preview behaves like a phone video editor — tap
+     the video itself to play/pause (a big play badge overlays while paused),
+     drag the bar under it to jump anywhere (`evBindScrubber`: hand-bound
+     pointer-capture drag; mid-drag the thumb/fill/clock are painted straight
+     into the DOM with re-renders suppressed via `this.evScrubbing`, state
+     catches up on release), and small ticks on the bar mark each timed
+     caption line. The preview rAF loop also glides the scrubber every frame.
+     On phones (≤720 px) the preview + player block is sticky under the
+     header (`.ev-preview-sticky`) so the live result stays visible while
+     scrolling the styling controls. The old standalone audio card now shows
+     only outside the editor (paste step — `evShowMiniPlayer`).
    - **Templates**: a "Templates" row at the top of the styling area
      (`EV_TEMPLATES`) with three complete pre-designed looks — Anthem,
      Handwritten, Neon — each shown as a live mini-canvas rendering "The
@@ -150,15 +161,26 @@ needs touching for app changes.
      summary banner is up), one small line above the timing toolbar says
      "Next: Auto-caption (AI) or tap Sync lyrics to time your captions."
    - **Video export**: records a 1920×1080 canvas (same renderer) + the song
-     into a WebM (VP9→VP8→plain fallback) via `canvas.captureStream(30)` +
-     Web Audio + `MediaRecorder`. No screen capture, no page UI in the file.
+     via `canvas.captureStream(30)` + Web Audio + `MediaRecorder`. Format is
+     picked per device (`evPickMime`): Apple devices/browsers (iPhone, iPad,
+     Safari — `evPreferMp4`) get **MP4 first** (H.264+AAC, the format the
+     iPhone Photos app accepts); everything else keeps the proven **WebM
+     first** (VP9→VP8→plain) — each side falls back to the other, so nothing
+     capable is ever refused. No screen capture, no page UI in the file.
      Full-screen progress view with Cancel locks the app while recording
-     (recording is real time: a 3-minute song takes ~3 minutes). Auto-downloads
-     as `<Title> - Lyric Video.webm` (illegal characters sanitized), then
-     shows size / duration / resolution, keeps a "Download again" button until
-     a different song is loaded, and warns when the file is over 35 MB (too
-     big for the Drive auto-save — the warning tells the owner to drag the
-     downloaded file into the Drive folder instead).
+     (recording is real time: a 3-minute song takes ~3 minutes); a best-effort
+     screen **wake lock** keeps phones from sleeping mid-recording. The file
+     is `<Title> - Lyric Video.mp4|webm` (illegal characters sanitized).
+     The finish differs by device (`evCanShareFiles`): iPhones/iPads (any
+     device whose share sheet takes files) do NOT auto-download — they get a
+     **"Save to iPhone Photos"** button (`evSaveToPhotos`: `navigator.share`
+     with the file; one tap on "Save Video" in the sheet lands it in Photos —
+     Apple allows no more-automatic path, a share needs a user gesture) plus
+     a "Download instead" fallback; desktops auto-download as before with
+     "Download again". Both then show size / duration / resolution / format,
+     keep their buttons until a different song is loaded, and warn when the
+     file is over 35 MB (too big for the Drive auto-save — the warning tells
+     the owner to drag the downloaded file into the Drive folder instead).
    - **Save to Google Drive**: after a successful export, a "Save to Google
      Drive" button (next to "Download again") sends `this.evExportBlob` to the
      backend's `save_video`, which files it in a Drive folder named
@@ -192,7 +214,8 @@ needs touching for app changes.
      - `evPatchWebmDuration` writes the duration into the WebM header
        (MediaRecorder leaves it out; players would show "unknown length").
        It's a minimal EBML walk — on anything unexpected it returns the
-       original blob, which still plays.
+       original blob, which still plays. MP4 recordings skip the patch
+       (Safari writes the duration itself).
      - The finished `Blob` stays on the instance as `this.evExportBlob`,
        details in `state.evExport` — that's what Save-to-Drive uploads, so no
        re-export is ever needed.
