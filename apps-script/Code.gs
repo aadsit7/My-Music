@@ -19,6 +19,14 @@
  *   · Script properties (Project Settings → Script properties): the AI API keys
  *     (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, GROK_API_KEY,
  *     DEEPSEEK_API_KEY) and the optional AI_TOKEN shared secret.
+ *
+ * CHANGE IN THIS VERSION: the authoritative SONGWRITER_SYSTEM prompt from the
+ * original v8 backend (world-class songwriter persona + strict Suno output
+ * contract) is restored and applied to ai_write requests, with v8's one-shot
+ * format retry. Two guards keep it safe: it is skipped when the app already
+ * sent its own copy of the contract (so the rules are never applied twice),
+ * and the format retry is skipped for section-rewrite requests, whose correct
+ * reply is bare lyric lines — not a full TITLE:/STYLE:/[Section] song.
  */
 
 // ---------------------------------------------------------------- constants
@@ -60,6 +68,63 @@ var DEFAULT_MODELS = {
   grok: 'grok-4',
   deepseek: 'deepseek-chat',
 };
+
+// ---------------------------------------------------------------- songwriter system prompt (restored from v8)
+
+// The world-class songwriter "brain". Applied to every full-song ai_write
+// request so each draft is hit-quality AND formatted exactly the way the
+// app's parser and Suno both need — including the per-section vocal-delivery
+// tags.
+var SONGWRITER_SYSTEM =
+'You are a world-class, award-winning hit songwriter and topliner — the kind who writes #1 singles that millions stream on repeat. Deliver ONE complete, original song that could genuinely top the charts.\n' +
+'\n' +
+'CRAFT (make it world-class):\n' +
+'- One strong concept and a title that sells it.\n' +
+'- An instantly memorable, repeatable CHORUS that is the emotional payoff — the part people sing back after one listen.\n' +
+'- Verses that build tension with contrast; a pre-chorus that lifts into the chorus; a bridge that turns.\n' +
+'- Concrete, sensory, specific images and fresh turns of phrase — never clichés or filler.\n' +
+'- Singable phrasing: consistent meter and syllable counts within each section, natural word stress, and a clear rhyme scheme.\n' +
+'- Contemporary, conversational, human language. Every line earns its place.\n' +
+'\n' +
+'ORIGINALITY & COPYRIGHT SAFETY (critical):\n' +
+'- Write 100% original words, hooks and melodies. Never copy or closely paraphrase any existing song.\n' +
+'- NEVER put a real person\'s name in the output — no artists, bands, producers, or brands — anywhere: not in TITLE, not in STYLE, not in a section tag, not in the lyrics. If the request describes a reference style, translate it into plain descriptive terms (gender, vocal texture, delivery, genre, era-feel) only. Music generators reject real names.\n' +
+'\n' +
+'SUNO-READY OUTPUT CONTRACT (follow EXACTLY — non-negotiable):\n' +
+'- Output ONLY the song. No preamble, no commentary, no explanations, no markdown, no code fences.\n' +
+'- Line 1 must be exactly: TITLE: <the song title>\n' +
+'- Line 2 must be exactly: STYLE: <8-12 comma-separated tags for the music generator\'s Style box — genre + subgenre, mood, tempo/energy, lead vocal type, key instrumentation, production aesthetic>. Keep them tag-like, not full sentences, and use no real names.\n' +
+'- Then the lyrics. Each section starts with its tag in square brackets on its own line, using the structure tags: [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Outro]. Include the sections the song needs; a hit almost always repeats the [Chorus].\n' +
+'- EVERY section tag must ALSO state HOW it is performed, written INSIDE the same brackets after a colon, so the music generator voices it correctly. Format: [Section: vocal cue]. Examples: [Verse 1: male vocal, melodic], [Pre-Chorus: male vocal, building], [Chorus: male & female harmonies, anthemic belt], [Verse 2: fast lightning rap, aggressive], [Bridge: female vocal, whispered], [Outro: layered gang vocals]. State the singer (male / female / duet / choir / gang vocals) and the delivery (melodic, belted, soft, whispered, falsetto, rap, fast rap, spoken, harmonized, gritty...), consistent with the lead vocal type on the STYLE line. Keep each tag under ~50 characters. NEVER put the vocal cue on its own separate line or in its own brackets — it must sit inside the section tag.\n' +
+'- Write the chorus lyrics out in full every time it recurs — never write "repeat chorus" (repeat the [Chorus: ...] tag with its vocal cue each time).\n' +
+'- Keep the whole lyric tight enough for a ~2-3 minute track: favor impact and repetition over length.\n' +
+'\n' +
+'If the request contains additional style, structure, or reference-artist instructions, honor them fully within all of the rules above.';
+
+// True when the incoming request already carries its own copy of the output
+// contract (e.g. the app prepended its SONGWRITER_DIRECTIVE) — in that case
+// the backend must not stack a second copy on top.
+function promptCarriesContract(prompt) {
+  return /SUNO-READY OUTPUT CONTRACT/i.test(prompt) ||
+         (/Line 1 must be exactly:\s*TITLE:/i.test(prompt) && /\[Section: vocal cue\]/i.test(prompt));
+}
+
+// True when the request wants bare lyric lines back, not a whole song — the
+// app's per-section rewrite ("Refresh section" / "Improve" in My songs) says
+// exactly this. Those replies must never be format-retried into a full song.
+function expectsBareLines(prompt) {
+  return /Return ONLY the rewritten lyric lines/i.test(prompt) ||
+         /rewrite ONLY this one section/i.test(prompt);
+}
+
+// True when a draft already follows the Suno contract: a TITLE: line plus at
+// least one [Section] tag. Used to decide whether a corrective retry is
+// needed. The bracket test allows up to ~120 characters inside the tag —
+// the app's own contract invites vocal cues up to ~90 characters, and a
+// perfectly good draft must not trigger the retry.
+function looksLikeSong(text) {
+  return /(^|\n)\s*title\s*:/i.test(text) && /\[[^\]\n]{1,120}\]/.test(text);
+}
 
 // ---------------------------------------------------------------- entry points
 
@@ -129,7 +194,29 @@ function handleAiSearch(provider, data) {
 function handleAiWrite(provider, data) {
   var prompt = String(data.prompt || '').trim();
   if (!prompt) throw new Error('The songwriting request was empty — describe your song first.');
-  var text = callAI(provider, prompt);
+
+  // Restored v8 behavior: every songwriting request is governed by the
+  // authoritative SONGWRITER_SYSTEM — unless the app already included its own
+  // copy of the contract in the request, in which case it isn't doubled up.
+  var fullPrompt = promptCarriesContract(prompt)
+    ? prompt
+    : SONGWRITER_SYSTEM + '\n\n=== THE SONG REQUEST ===\n' + prompt;
+
+  var text = callAI(provider, fullPrompt);
+
+  // One-shot self-correction (also from v8): if the model ignored the format,
+  // ask again with a blunt reminder so the app's parser and Suno always get
+  // clean input. Never for section rewrites — their correct reply is bare
+  // lyric lines, and this reminder would push the model into returning a
+  // whole song where one section belongs.
+  if (!expectsBareLines(prompt) && !looksLikeSong(text)) {
+    var retryPrompt = fullPrompt +
+      '\n\n[FORMAT REMINDER] Return ONLY the song, nothing else. First line "TITLE: ...", ' +
+      'second line "STYLE: ...", then the lyrics with each section as [Section: vocal cue] ' +
+      'on its own line. No commentary, no markdown, no real names.';
+    text = callAI(provider, retryPrompt);
+  }
+
   return { ok: true, text: text, provider: provider };
 }
 

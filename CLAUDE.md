@@ -208,6 +208,12 @@ needs touching for app changes.
   `list_originals`, `update_original`, `delete_original`, `save_video`,
   `list_videos`, `transcribe_audio`. Body `{ type, data, provider, token }` →
   `{ ok: true, … }`.
+- `ai_write` carries the v8 `SONGWRITER_SYSTEM` prompt (world-class songwriter
+  persona + strict Suno output contract) plus a one-shot format retry when the
+  reply isn't song-shaped. Guards: the system prompt is skipped when the app's
+  request already carries the contract (the app's `SONGWRITER_DIRECTIVE` — so
+  rules are never stacked twice), and the retry is skipped for per-section
+  rewrite requests, whose correct reply is bare lyric lines, not a full song.
 - `transcribe_audio` always uses Gemini (`GEMINI_API_KEY`) regardless of the
   picked provider — it's the only configured provider wired for audio input.
   It takes `{ audioBase64, mimeType, knownLyrics }`, asks for strict JSON
