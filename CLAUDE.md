@@ -110,15 +110,49 @@ needs touching for app changes.
      line 0.1 s at once — the fix for "each tap landed a touch late" — blocked
      with a plain-English note at 0:00 and the song's end. Preview-from-line,
      re-sync from a line, save/load timing file.
-   - **Auto-caption (AI)**: sends the loaded audio to the backend's
-     `transcribe_audio` (Gemini listens to the song and returns timed lines).
-     Two paths: with existing lyrics (My songs / pasted) the caption lines
-     ride along as `knownLyrics` and the AI only aligns timings — the
-     high-accuracy path; at the paste step with no lyrics, an "Auto-caption"
-     option transcribes the words too. Audio is fetched to a local blob (same
-     as export, same CORS-link error) and sent as base64 — client cap 13 MB
-     raw, server cap 18 MB base64 (Gemini's inline-audio ceiling; a 3-min MP3
-     is ~4 MB, big WAVs get a plain-English "use an MP3" error).
+   - **Auto-caption — LOCAL engine (the primary caption timer)**: a small
+     Whisper speech model runs ON THE DEVICE via transformers.js — no API
+     key, no backend call, no quota, and the song never leaves the browser.
+     Constants `EV_WHISPER_LIB_URL` (`@xenova/transformers@2.17.2` from
+     jsDelivr) and `EV_WHISPER_MODEL` (`Xenova/whisper-tiny.en` — tested
+     against base.en: 1.8× faster, ~⅓ the download, equal line-timing
+     accuracy after alignment). The library + model load **lazily, only when
+     Auto-caption first runs — never on page load** (~45 MB one time; the
+     busy card says so and shows a real download %). After that the browser's
+     own cache serves it, so later runs start in seconds and work offline.
+     The engine runs in a **Web Worker built from a string**
+     (`EV_WHISPER_WORKER_SRC`, module worker from a blob URL — single-file
+     app friendly), so the page stays responsive and **Cancel really works**
+     (`terminate()`); the worker is dropped after every run to give the
+     memory back. Audio is fetched to a local blob (same as export, same
+     CORS-link error), decoded to 16 kHz mono via Web Audio
+     (`evDecodeAudio16k`), and Whisper returns word-level timestamps
+     (30 s windows, 5 s stride). Progress %: `data-ev-ac-*` DOM hooks
+     (`evAcSetPct`), phase text in `evAcPhase` state.
+     Two paths: with existing lyrics (My songs / pasted), **the owner's lines
+     are gospel** — `evAlignLines` fuzzy-aligns them to Whisper's word stream
+     (Needleman-Wunsch over `evWordSim` word similarity; Whisper only
+     supplies timing). Weakly-matched lines (< 50 % of words, guards against
+     stolen neighbours when Whisper drops a line) are interpolated between
+     timed neighbours, and a run with overall match quality < 0.35 fails
+     with a plain-English message instead of applying garbage. Measured on a
+     3-min test song: mean line error ~0.7 s. Per-word karaoke timing was
+     evaluated and deliberately NOT wired in: word-to-word stamps are not
+     reliable enough inside lines (first-word-after-silence stretching,
+     dropped words), so the karaoke wipe keeps its length-weighted estimate.
+     With no lyrics (paste step), `evWordsToRows` breaks Whisper's own words
+     into caption-sized lines (gap > 1.2 s, ≥ 9 words, or sentence end).
+     Feature detection: no WebAssembly/Worker → plain-English "can't run on
+     this browser" + tap-sync pointer. **iPhone Safari is untested** in this
+     environment — the failure path is graceful, but test on a real iPhone.
+     **Gemini demoted, not deleted**: the backend's `transcribe_audio` is
+     never called on the default path. It survives as `evAutoCaptionCloud`,
+     offered ONLY as a "Try cloud captioning instead" button on the local
+     engine's failure card (`evAcCloudOffer`), with its old 13 MB cap.
+     Both engines share `evAcBegin` (job token, busy card) / `evAcFinish`
+     (guardrails, review) — a new `evAcBegin` also terminates any older
+     worker BEFORE minting the new job token, so a superseded run can never
+     kill its successor's worker (real bug, don't reintroduce).
      **RULE — never bypass this: transcription results must ALWAYS pass
      through the mandatory full-screen review screen.** There the owner
      rewords lines, deletes junk lines, and plays any line from 2 s before
@@ -126,14 +160,18 @@ needs touching for app changes.
      leaves everything untouched. Accepted captions are ordinary timings —
      nudges, re-sync-from-a-line, styles, preview, export and Drive save all
      work unchanged — and the ascending-order guardrail is enforced at every
-     step (server parse, client receive, accept). When the AI aligned the
+     step (engine result, `evAcFinish`, accept). When the run aligned the
      song's own lyrics one-to-one, review rows carry `srcIdx` back to their
      `evItems` line, so accepting keeps `[Section]` headers and drops
      review-deleted lines; transcribed rows replace the line list wholesale.
-     The tap-sync flow is untouched and remains the fallback for a bad AI
-     result. While the review screen is open, the audio `timeupdate`
+     The tap-sync flow is untouched and remains the manual fallback for a
+     bad result. While the review screen is open, the audio `timeupdate`
      re-render is suppressed (like sync mode) so the reword box can't be
      wiped mid-typing by a re-render during spot-check playback.
+     Any new full-width screens for this feature must follow the mobile
+     rules: cover or clear the tab bar (`position:fixed;inset:0;z-index:5000`
+     like sync/review/export), respect `--safe-bottom`, 44 px touch targets,
+     inputs ≥ 16 px font.
      **Auto-start**: captions kick off by themselves — `evMaybeAutoCaption`
      runs when fresh audio becomes readable (one-shot `evAcAutoArm`, armed in
      `evSetAudio`, fired from `loadedmetadata` a tick later) and again when
@@ -144,7 +182,9 @@ needs touching for app changes.
      it can never stomp work; both triggers are one-shot events, so a failed
      or discarded run never loops — the Auto-caption button stays the manual
      retry, and the mandatory review rule above applies to auto runs exactly
-     as to button presses.
+     as to button presses. Auto-start invokes the LOCAL engine (first use
+     triggers the one-time engine download); the cloud path only ever starts
+     from its failure-card button.
    - **Background photo**: "Add a background photo" in the styling panel takes
      any picture (iPhone camera roll included — iOS hands HEIC over as JPEG);
      it's pre-cropped once into a 1920×1080 cover-fit canvas on the instance
@@ -317,6 +357,9 @@ needs touching for app changes.
   persists after a redeploy.
 - `transcribe_audio` always uses Gemini (`GEMINI_API_KEY`) regardless of the
   picked provider — it's the only configured provider wired for audio input.
+  Since the local Whisper engine became the primary caption timer, the app
+  only calls it from the "Try cloud captioning instead" failure-state link —
+  keep the endpoint working, but nothing depends on it day to day.
 - Gemini's default model is the rolling alias `gemini-flash-latest` (fixed
   names get retired — `gemini-2.5-flash` started 404ing "no longer available"
   mid-2026 and silently broke Auto-caption). Every Gemini call goes through
@@ -351,3 +394,12 @@ needs touching for app changes.
 - Export was verified in Chromium (Chrome). Firefox/Edge pass the feature
   detection on paper (WebM + captureStream + MediaRecorder) but were not
   test-run — say so honestly in checklists rather than claiming otherwise.
+- The local caption engine was verified end to end in headless Chromium
+  (espeak-generated test songs with known line times; word timestamps and
+  the aligner checked against ground truth). Heads-up for future test rigs:
+  this container's egress proxy resets Chromium's TLS, so the Playwright
+  tests intercept cdn.jsdelivr.net / huggingface.co requests and serve
+  curl-fetched bytes; the shipped app fetches them directly, no proxy
+  involved. iPhone Safari could not be tested here — feature detection and
+  the graceful failure message are in place, but say so in checklists until
+  the owner confirms a real iPhone run.
