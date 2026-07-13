@@ -483,7 +483,7 @@ function handleSaveVideo(data) {
 
   var mimeType = String(data.mimeType || 'video/webm');
   var title = String(data.title || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() || 'My Song';
-  var fileName = title + ' - Lyric Video' + (mimeType.indexOf('webm') !== -1 ? '.webm' : '');
+  var fileName = title + ' - Lyric Video' + (mimeType.indexOf('webm') !== -1 ? '.webm' : (mimeType.indexOf('mp4') !== -1 ? '.mp4' : ''));
 
   var folder = getOrCreateVideosFolder();
   var file = folder.createFile(Utilities.newBlob(bytes, mimeType, fileName));
