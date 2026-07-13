@@ -122,6 +122,35 @@ needs touching for app changes.
      result. While the review screen is open, the audio `timeupdate`
      re-render is suppressed (like sync mode) so the reword box can't be
      wiped mid-typing by a re-render during spot-check playback.
+   - **Background photo**: "Add a background photo" in the styling panel takes
+     any picture (iPhone camera roll included — iOS hands HEIC over as JPEG);
+     it's pre-cropped once into a 1920×1080 cover-fit canvas on the instance
+     (`this.evBgImg`, flag `state.evBgPhoto`) and painted behind the captions
+     by `evRenderFrame`, so preview, thumbnails and export always match. The
+     photo never leaves the browser and is session-only (megabytes don't fit
+     localStorage). Comes with a **"Darken photo" slider** (`evBgDim`, 0–90 %;
+     mid-drag the value lives on the instance so no re-render can rebuild the
+     slider under the finger) and a **"Slow zoom" toggle** (`evBgMotion`,
+     1×→1.08× across the clip, a plain canvas transform so it records). Over
+     a photo every caption style gets a dark drop shadow for readability and
+     the color-contrast warning is suppressed. Dim/zoom prefs persist in the
+     caption localStorage bundle; the photo itself does not.
+   - **Intro title card** (`evIntro` toggle, persisted): the song title fades
+     in/out at the start of the clip. `evIntroWindow` guarantees it never
+     overlaps a caption — it ends at the first caption after the clip start
+     (4.5 s max) and is skipped entirely when a caption is already up at the
+     clip start or there's under 1.4 s of room (the panel says so).
+   - **Trim** (`evTrimStart`/`evTrimEnd`, 0/0 = whole song): a row under the
+     preview scrubber — scrub anywhere, tap "Start here" / "End here" (3 s
+     minimum with a friendly guardrail note; "Whole song" resets). The
+     clipped-off ends show as dark shading on the scrubber and the Export
+     button becomes "Export Clip (m:ss)". Export seeks to the clip start, a
+     33 ms watcher ends the recording at the clip end (the audio element's
+     "ended" never fires mid-song), progress and the WebM duration patch use
+     the clip length, and the paint clock is clamped to the clip end so the
+     sealing grace beat can't flash the caption stamped right at it. Captions
+     keep their absolute stamps — a clip starting mid-song simply opens on
+     whatever caption is current there. Trim resets whenever new audio loads.
    - Caption styling: Classic / Bold / Karaoke / Fade / Anthem / Handwritten /
      Neon, size, font, position, text/background colors, contrast warning;
      live 16:9 canvas preview painted every frame from the audio clock
