@@ -349,9 +349,16 @@ function handleTranscribeAudio(data) {
   var model = settings.models.gemini || DEFAULT_MODELS.gemini;
   var prompt = transcribePrompt(knownLyrics);
 
+  var startMs = Date.now();
   var raw = callGeminiAudio(key, model, prompt, audioBase64, mimeType);
   var lines = parseTranscription(raw, knownLyrics);
-  if (!lines) {
+  // Only spend a SECOND slow audio round if there's comfortably time left
+  // inside Apps Script's 6-minute execution ceiling. Each round is an inline
+  // ~13 MB upload plus geminiGenerate's own retries/backoff; back-to-back on a
+  // bad day they could otherwise run past the limit and die with a raw timeout
+  // instead of the plain-English error below. If round one already burned more
+  // than ~3 minutes, skip the retry and fail cleanly.
+  if (!lines && Date.now() - startMs < 180000) {
     // One retry with a blunt reminder — same one-shot style the app's other
     // parse-the-AI's-JSON flows use.
     var reminder = '\n\nREMINDER — YOUR PREVIOUS REPLY WAS NOT USABLE. Reply with ONLY a JSON array of objects like {"startSeconds": 12.4, "text": "one lyric line"}. startSeconds values MUST increase from one element to the next. No code fences, no commentary, no other fields, nothing before or after the array.'
