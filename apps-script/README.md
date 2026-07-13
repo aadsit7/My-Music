@@ -29,6 +29,15 @@ writes) **plus**:
   `gemini-flash-latest` (Google's always-current name) and, if a model name
   is ever rejected again, automatically tries the next known name instead of
   failing. **You must redeploy for this fix to take effect** (see below).
+  One thing to know: a "Gemini Model" row on your Sheet's **Settings** tab
+  always wins over the script's built-in default — if that row names a dead
+  model the error comes back, so keep it on `gemini-flash-latest` (or clear
+  it).
+- **The songwriter "brain"** — every Songwriter request is wrapped in the
+  world-class-songwriter instructions with the Suno-ready output contract
+  (TITLE:/STYLE: lines, `[Section: vocal cue]` tags), unless the app already
+  sent its own copy. A reply that doesn't look like a song is retried once
+  with a format reminder.
 
 ## How to install it (step by step)
 
