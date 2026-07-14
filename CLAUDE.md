@@ -135,11 +135,27 @@ needs touching for app changes.
      supplies timing). Weakly-matched lines (< 50 % of words, guards against
      stolen neighbours when Whisper drops a line) are interpolated between
      timed neighbours, and a run with overall match quality < 0.35 fails
-     with a plain-English message instead of applying garbage. Measured on a
-     3-min test song: mean line error ~0.7 s. Per-word karaoke timing was
-     evaluated and deliberately NOT wired in: word-to-word stamps are not
-     reliable enough inside lines (first-word-after-silence stretching,
-     dropped words), so the karaoke wipe keeps its length-weighted estimate.
+     with a plain-English message instead of applying garbage.
+     **Onset-refined line starts (the accuracy-fusion step)**: the aligner
+     knows WHICH line each start belongs to, but Whisper's word timestamps are
+     coarse (tiny quantizes to ~20 ms frames and rounds a sung onset a few
+     tenths early/late). So after alignment, `evRefineLinesToOnsets` snaps each
+     confidently-heard line start onto the nearest real sound onset
+     (`evDetectOnsets`, the same pure Web Audio the "Tighten timing" button
+     uses) within a tight ±0.35 s window — ASR picks the line, the onset pins
+     the millisecond, the exact fuse professional forced aligners use. Kept
+     conservative so it can only help: only directly-heard lines move (the
+     aligner returns a `placed` flag; interpolated guesses are left alone), a
+     line moves at most 0.35 s, order is preserved and one onset serves one
+     line, and it's best-effort (audio unreadable for onsets → keep the aligned
+     times). Verified on synthetic coarse/late word streams: mean line error
+     drops from ~0.25 s to ~0.02 s (max ~0.32 s → ~0.11 s); with the earlier
+     back-projection the plain aligner already reaches ~0.25 s, so the two
+     stack. Per-word karaoke timing was evaluated and deliberately NOT wired
+     in: word-to-word stamps are not reliable enough inside lines
+     (first-word-after-silence stretching, dropped words), so the karaoke wipe
+     keeps its length-weighted estimate — but the wipe anchors to each line's
+     start, so tighter line starts sharpen the karaoke sweep too.
      With no lyrics (paste step), `evWordsToRows` breaks Whisper's own words
      into caption-sized lines (gap > 1.2 s, ≥ 9 words, or sentence end).
      Feature detection: no WebAssembly/Worker → with known lyrics we don't
