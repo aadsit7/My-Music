@@ -97,10 +97,28 @@ needs touching for app changes.
    normal saved song. Delete and per-section AI are gated off until it's saved.
 6. **Settings** — AI provider picker, access token, provider status.
 7. **Edit Video** — lyric-video maker:
+   - **Staged editor (`state.evStage`, `onEvStage`)**: once a song is loaded
+     and `evStep === 'ready'`, the controls are split into two focused stages
+     behind a segmented switcher that sits under the always-visible preview —
+     **Captions** (`evStageCaptions`: the lyric list + all its timing tools)
+     and **Style** (`evStageStyle`: templates + the whole look). Only one
+     stage's controls mount at a time, so the phone never shows the whole
+     wall of buttons at once (the "too many buttons" fix). The preview canvas,
+     player and Export button stay outside the switcher so they're visible on
+     both stages; the styling thumbnails are painted on-mount by `evDrawThumbs`
+     when the Style stage appears (querySelectorAll → no-op when hidden), and
+     the preview loop keeps running because its canvas is never unmounted.
+     `evStage` resets to `'captions'` on every song load / accept. Switching
+     stages first commits any open line edit (`evCommitEdit`) so a half-typed
+     line can't be stranded off-screen.
    - Load a song from My songs (lyrics + linked audio when the sheet row has
      a playable URL) or upload an MP3/WAV and paste lyrics. Audio never
      leaves the browser.
-   - Lyric lines are editable; `[Section]` headers never become captions.
+   - Lyric lines are editable; `[Section]` headers never become captions. A
+     resting timed line shows just its number, words, time pill and −/+/▶
+     nudges; **"Re-sync from here" moved off every row into the open line
+     editor** (`data-ev-act="resync"` → `onEvLineAction` → `evResyncFrom`,
+     which folds in the edit and no-ops without audio) to keep the list clean.
    - Tap-along timing sync (full-screen view): live "x of y timed" counter,
      stamped lines show ✓, the waiting line sits on a brand-soft pill.
      **Back a line** (footer button, or Backspace/Z) un-stamps the last tap of
