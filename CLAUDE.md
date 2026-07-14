@@ -89,7 +89,12 @@ needs touching for app changes.
 3. **Songwriter** — AI lyric drafting/refining, voice input, save to Sheet.
 4. **Suno** ("Make music") — copy-for-Suno flow; tab can be hidden by prop.
 5. **My songs** — songs saved in the Google Sheet: list, edit, delete,
-   per-section AI rewrite, copy for Suno.
+   per-section AI rewrite, copy for Suno. A **"+ New song"** button (list
+   header and empty state) opens the same detail editor on a blank, unsaved
+   song (`myNew` flag, `mySel` null) so the owner can type/paste a title,
+   lyrics and style by hand — no AI needed; Save writes it via the `original`
+   endpoint (like the Songwriter's Save) then folds it into the list as a
+   normal saved song. Delete and per-section AI are gated off until it's saved.
 6. **Settings** — AI provider picker, access token, provider status.
 7. **Edit Video** — lyric-video maker:
    - Load a song from My songs (lyrics + linked audio when the sheet row has
