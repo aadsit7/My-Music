@@ -133,9 +133,15 @@ needs touching for app changes.
      are gospel** — `evAlignLines` fuzzy-aligns them to Whisper's word stream
      (Needleman-Wunsch over `evWordSim` word similarity; Whisper only
      supplies timing). Weakly-matched lines (< 50 % of words, guards against
-     stolen neighbours when Whisper drops a line) are interpolated between
-     timed neighbours, and a run with overall match quality < 0.35 fails
-     with a plain-English message instead of applying garbage.
+     stolen neighbours when Whisper drops a line) are filled in between the
+     timed neighbours **weighted by syllable count** (`evSyllableCount`, the
+     same duration model the no-AI onset fallback uses) rather than evenly by
+     line number — a dropped 2-word interjection and a dropped 12-word line
+     don't take equal time to sing, so even spacing landed the hard,
+     instrument-heavy songs' dropped lines visibly off; syllable-weighting cut
+     synthetic dropped-line error ~34 % with the confidently-heard lines left
+     byte-identical. A run with overall match quality < 0.35 fails with a
+     plain-English message instead of applying garbage.
      **Onset-refined line starts (the accuracy-fusion step)**: the aligner
      knows WHICH line each start belongs to, but Whisper's word timestamps are
      coarse (tiny quantizes to ~20 ms frames and rounds a sung onset a few
@@ -155,11 +161,21 @@ needs touching for app changes.
      line past the aligned baseline (max stays 0.86 s). The manual "Tighten
      timing" button keeps the plain full-mix `evDetectOnsets(blob)` — it aligns
      the owner's taps to any musical beat, not only the voice. Kept
-     conservative so it can only help: only directly-heard lines move (the
-     aligner returns a `placed` flag; interpolated guesses are left alone), a
-     line moves at most 0.35 s, order is preserved and one onset serves one
-     line, and it's best-effort (audio unreadable for onsets, or too few vocal
-     onsets found → keep the aligned times). Verified on synthetic coarse/late
+     conservative so it can only help: a directly-heard line (the aligner's
+     `placed` flag) moves at most **0.35 s** — a correction to Whisper's coarse
+     timestamp; an interpolated line (Whisper never heard it, so its
+     syllable-spread time is the least certain we have) may reach a real vocal
+     attack within a wider **0.5 s**, because for those a nearby onset is
+     stronger evidence than the guess. Both are order-preserving, one onset
+     serves one line, and it's best-effort (audio unreadable for onsets, or too
+     few vocal onsets found → keep the aligned times). The interpolated-line
+     snap is passed as `evRefineLinesToOnsets`'s optional fifth arg
+     (`interpWindow`); omitting it keeps the old placed-only behaviour, which
+     the manual "Tighten timing" path still uses. Verified on synthetic songs:
+     heard lines stay byte-identical to before, dropped-line error falls a
+     further ~15 % on top of the syllable-weighting, and the worst-case line is
+     unchanged (a gap-extrapolation line with no nearby onset, caught in the
+     mandatory review). Verified on synthetic coarse/late
      word streams: mean line error drops from ~0.25 s to ~0.02 s (max ~0.32 s →
      ~0.11 s); with the earlier back-projection the plain aligner already
      reaches ~0.25 s, so the two stack. Per-word karaoke timing was evaluated and deliberately NOT wired
