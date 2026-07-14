@@ -141,17 +141,28 @@ needs touching for app changes.
      coarse (tiny quantizes to ~20 ms frames and rounds a sung onset a few
      tenths early/late). So after alignment, `evRefineLinesToOnsets` snaps each
      confidently-heard line start onto the nearest real sound onset
-     (`evDetectOnsets`, the same pure Web Audio the "Tighten timing" button
-     uses) within a tight ±0.35 s window — ASR picks the line, the onset pins
-     the millisecond, the exact fuse professional forced aligners use. Kept
+     (`evDetectOnsets`) within a tight ±0.35 s window — ASR picks the line, the
+     onset pins the millisecond, the exact fuse professional forced aligners
+     use. **The onsets here are VOCAL-shaped** (`evDetectOnsets(blob, true)`:
+     sub-bass cut to 220 Hz, a +6 dB lift at the 2.7 kHz vocal-presence band,
+     top rolled off at 3.6 kHz) so the snap targets are SUNG attacks, not drum
+     hits — this matters because a percussion onset sitting inside the window
+     would otherwise yank a caption a few tenths off the voice. Measured on
+     synthetic songs with a percussion grid: full-mix onsets cut mean error but
+     could push an individual line's error ABOVE the un-refined estimate
+     (max 0.86 s → 1.01 s — the refinement occasionally hurting); vocal-shaped
+     onsets cut mean line error further (0.16 s → 0.11 s) AND never worsen a
+     line past the aligned baseline (max stays 0.86 s). The manual "Tighten
+     timing" button keeps the plain full-mix `evDetectOnsets(blob)` — it aligns
+     the owner's taps to any musical beat, not only the voice. Kept
      conservative so it can only help: only directly-heard lines move (the
      aligner returns a `placed` flag; interpolated guesses are left alone), a
      line moves at most 0.35 s, order is preserved and one onset serves one
-     line, and it's best-effort (audio unreadable for onsets → keep the aligned
-     times). Verified on synthetic coarse/late word streams: mean line error
-     drops from ~0.25 s to ~0.02 s (max ~0.32 s → ~0.11 s); with the earlier
-     back-projection the plain aligner already reaches ~0.25 s, so the two
-     stack. Per-word karaoke timing was evaluated and deliberately NOT wired
+     line, and it's best-effort (audio unreadable for onsets, or too few vocal
+     onsets found → keep the aligned times). Verified on synthetic coarse/late
+     word streams: mean line error drops from ~0.25 s to ~0.02 s (max ~0.32 s →
+     ~0.11 s); with the earlier back-projection the plain aligner already
+     reaches ~0.25 s, so the two stack. Per-word karaoke timing was evaluated and deliberately NOT wired
      in: word-to-word stamps are not reliable enough inside lines
      (first-word-after-silence stretching, dropped words), so the karaoke wipe
      keeps its length-weighted estimate — but the wipe anchors to each line's
