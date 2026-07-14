@@ -147,10 +147,36 @@ needs touching for app changes.
      synthetic dropped-line error ~34 % with the confidently-heard lines left
      byte-identical. A run with overall match quality < 0.35 fails with a
      plain-English message instead of applying garbage.
+     **Global lag de-bias (`evEstimateGlobalLag`, the systematic-offset fix —
+     runs BEFORE the onset snap)**: every world-class lyric syncer takes the
+     ASR's CONSTANT timestamp bias out of the whole track before any per-line
+     work. whisper-tiny reports each sung word's start a fairly constant
+     fraction of a second LATE (it must hear into a word before it fires), so
+     every caption inherits the same lag — "the words are right but everything's
+     a beat behind." The per-line onset snap below only fixes a line when a
+     vocal onset lands inside its tight window, so a soft vocal entry, a line
+     buried under the band, or an unheard (interpolated) line keeps the full lag
+     and the result feels un-synced. So we measure the lag ONCE: for each
+     confidently-heard (`placed`) line with a vocal onset within ±0.7 s, record
+     (alignedStart − onset); the **median** of those deltas (robust to the few
+     lines that snapped to the wrong onset — a mean would be dragged around) is
+     the systematic lag, trusted only with ≥ 6 samples and clamped to ±0.6 s so
+     a freak estimate can't wreck a good run. That single constant is subtracted
+     from EVERY line (the interpolated and missed-onset lines the local snap
+     can't reach included), then the local snap re-locks the confident lines to
+     the millisecond — global de-bias then local refine, the two-stage fix pro
+     forced aligners use. Verified on 40-song synthetic batches: on a constant
+     0.35 s late bias (the classic Whisper symptom) mean line error falls
+     **0.315 s → 0.087 s (−73 %)**; heavy 0.5 s bias −54 %; a negative/early
+     bias is detected and corrected too; and on a near-zero-bias song it's a
+     strict no-op (1 %), so it can't harm a song that isn't lagged, and max line
+     error never worsened in any scenario. The no-AI onset fallback
+     (`evDistributeToOnsets`) and the manual "Tighten timing" path don't use it
+     — they carry no ASR bias to remove.
      **Onset-refined line starts (the accuracy-fusion step)**: the aligner
      knows WHICH line each start belongs to, but Whisper's word timestamps are
      coarse (tiny quantizes to ~20 ms frames and rounds a sung onset a few
-     tenths early/late). So after alignment, `evRefineLinesToOnsets` snaps each
+     tenths early/late). So after the de-bias above, `evRefineLinesToOnsets` snaps each
      confidently-heard line start onto the nearest real sound onset
      (`evDetectOnsets`) within a tight ±0.35 s window — ASR picks the line, the
      onset pins the millisecond, the exact fuse professional forced aligners
