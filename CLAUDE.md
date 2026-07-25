@@ -95,7 +95,14 @@ needs touching for app changes.
    lyrics and style by hand — no AI needed; Save writes it via the `original`
    endpoint (like the Songwriter's Save) then folds it into the list as a
    normal saved song. Delete and per-section AI are gated off until it's saved.
-6. **Settings** — AI provider picker, access token, provider status.
+6. **Settings** — AI provider picker, access token, provider status, plus
+   **"Test the AI connections"** (`testProviders`): the Ready / No key badge
+   only ever meant "a key is saved", which is not the same as "this works" —
+   a key whose credit has run out, or one whose model the provider has since
+   retired, still showed as Ready and then failed every song. The button sends
+   a one-line real request to each AI that has a key (failover deliberately
+   OFF — the point is to hear from *that* one) and reports what actually came
+   back, per provider.
 7. **Edit Video** — lyric-video maker:
    - **Staged editor (`state.evStage`, `onEvStage`)**: once a song is loaded
      and `evStep === 'ready'`, the controls are split into two focused stages
@@ -448,6 +455,54 @@ needs touching for app changes.
        details in `state.evExport` — that's what Save-to-Drive uploads, so no
        re-export is ever needed.
 
+## Talking to the backend (`apiRequest`) — read before touching it
+
+Standing rule 1 still holds: `SHEETS_ENDPOINT` is not to be changed. What
+lives around it now is a resilience layer, added after the app was found
+stuck on "Writing your song…" for ever on a phone. Three separate faults,
+all real, all measured:
+
+1. **A request that never comes back.** `fetch` had no timeout, so a locked
+   screen, a 5G-to-Wi-Fi handoff or a carrier proxy dropping an idle socket
+   left the promise pending for ever — spinner turning, no error, no way out.
+   Writing a song genuinely takes ~50 s (measured against the live backend),
+   so the socket sits idle exactly long enough to get dropped. Now every
+   attempt has a hard deadline (`apiTimeoutFor`) **and** the whole request has
+   an overall ceiling (`apiDeadlineFor`) that retries and hand-offs share —
+   without the ceiling, three back-to-back 110 s attempts meant five minutes
+   of spinner, barely better than for ever. Verified: a permanently stalled
+   socket now gives up at ~168 s with a plain-English message; before, it was
+   still spinning at 200 s+ with no end.
+2. **A passing hiccup** — dropped connection, a 5xx, "high demand". One blip
+   used to end the request. Retried now with a growing pause; after a
+   *timeout* the pause is skipped (the wait already happened).
+3. **The picked AI being out of action.** `apiErrorKind` sorts failures into
+   `fatal` (bad token — stop), `provider` (no key, quota gone, retired model —
+   a different AI may work) and `transient` (repeat). On a `provider` error an
+   `ai_write` / `ai_search` request is handed to the next AI that has a key
+   (`apiProviderChain`, ordered by `PROVIDERS`, filtered by the `status`
+   call's key map). **This is the part that works with the backend exactly as
+   already deployed** — no redeploy needed. The status probe is kicked off at
+   mount so the chain is known before it is needed.
+
+**Never retry a write.** `apiRetryable` allows repeats only for reads and AI
+calls (all pure). `original`, `update_original`, `delete_original` and
+`save_video` get exactly one attempt, so a slow save can't become two rows.
+
+Busy cards use `aiJobStart()` / `aiJobStop(signal)`: the job owns the
+`AbortController` (so **Cancel** genuinely aborts) and ticks elapsed seconds
+plus a live note into `data-ai-elapsed` / `data-ai-note` **straight in the
+DOM** — a re-render every second would rebuild the card, the same reason the
+sync clock and export progress write to the DOM. Always pass the signal to
+`aiJobStop` so a slow request finishing late can't switch off a newer job's
+ticker. Cancelling is not an error: it clears the card and says nothing.
+
+The Songwriter brief is refilled from `state.swPrompt` in `componentDidUpdate`
+— it is an uncontrolled textarea inside a design-system component, so every
+re-render rebuilt it empty, which is why the owner's screenshot showed a
+placeholder under "Writing your song…" and why a failed request used to eat
+what they had typed.
+
 ## The backend (Google Apps Script)
 
 - The full script lives in `apps-script/Code.gs` (install/redeploy steps in
@@ -470,6 +525,24 @@ needs touching for app changes.
   stale "Gemini Model" value there (e.g. the retired `gemini-2.5-flash`) wins
   over the code's default, so check the sheet first when a model error
   persists after a redeploy.
+- **Retired model names are this app's most common silent death.** Gemini did
+  it to `gemini-2.5-flash`; DeepSeek then did exactly the same to
+  `deepseek-chat`, which began answering `400 "The supported API model names
+  are deepseek-v4-pro or deepseek-v4-flash"` — so picking DeepSeek in Settings
+  failed every single time. Default is now `deepseek-v4-flash`, and the
+  fallback-walk that only Gemini used to get is now `MODEL_FALLBACKS` for
+  **every** provider, driven by the shared `resilientModelCall`
+  (transient wobble → pause and repeat the same model; retired name → walk the
+  fallbacks; anything else → throw at once). `isTransientAiError`,
+  `isQuotaError` and `isRetiredModelError` classify; a blown quota is
+  deliberately NOT transient — it doesn't clear in seconds, so retrying it
+  just wastes the owner's time. `isTransientGeminiError` and
+  `GEMINI_MODEL_FALLBACKS` are kept as thin aliases so the audio path reads
+  the same as before.
+- **Editing Code.gs changes nothing until the owner redeploys** (paste into
+  Apps Script → deploy a *New version* on the existing deployment). The client
+  is written not to depend on it: provider failover, timeouts and retries all
+  work against the currently deployed script.
 - `transcribe_audio` always uses Gemini (`GEMINI_API_KEY`) regardless of the
   picked provider — it's the only configured provider wired for audio input.
   Since the local Whisper engine became the primary caption timer, the app
@@ -511,6 +584,15 @@ needs touching for app changes.
   what the clock bridge compensates. Verify sync by putting beeps in the
   test WAV at the caption times and comparing beep positions vs frame-change
   positions in the recorded file (ffmpeg).
+- The AI request layer was verified in headless Chromium against the **live**
+  Apps Script backend: a real song write (44–54 s), a live search (24 s), a
+  live per-section rewrite (15 s), Cancel mid-flight, a simulated offline
+  fetch (fails in 6 s with "you look offline"), a permanently stalled socket
+  (gives up at ~168 s instead of spinning for ever) and provider failover for
+  all three provider-down shapes (quota / retired model / no key). The
+  container's egress proxy resets Chromium's TLS, so the test harness
+  intercepts `script.google.com` and serves curl-fetched bytes; the shipped
+  app talks to it directly. iPhone Safari could not be tested here.
 - Export was verified in Chromium (Chrome). Firefox/Edge pass the feature
   detection on paper (WebM + captureStream + MediaRecorder) but were not
   test-run — say so honestly in checklists rather than claiming otherwise.

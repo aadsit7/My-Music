@@ -57,18 +57,32 @@ var TRANSCRIBE_MAX_BASE64 = 18 * 1024 * 1024;
 // newest stable Flash model — fixed model names get retired (gemini-2.5-flash
 // started returning 404 "no longer available" in mid-2026, which silently
 // broke Auto-caption until this was found).
+// DeepSeek did exactly the same thing to 'deepseek-chat', which started
+// answering 400 "The supported API model names are deepseek-v4-pro or
+// deepseek-v4-flash" — so picking DeepSeek in the app's Settings failed every
+// single time. Same disease, same cure: a current default plus a fallback list.
 var DEFAULT_MODELS = {
   claude: 'claude-sonnet-4-6',
   openai: 'gpt-4o',
   gemini: 'gemini-flash-latest',
   grok: 'grok-4',
-  deepseek: 'deepseek-chat',
+  deepseek: 'deepseek-v4-flash',
 };
 
-// If the picked Gemini model name is ever rejected as unknown/retired, these
-// are tried next, in order, before giving up. Keeps Auto-caption (which can
-// only run on Gemini) working across Google's model retirements.
-var GEMINI_MODEL_FALLBACKS = ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+// If a model name is ever rejected as unknown/retired, these are tried next,
+// in order, before giving up. Every provider gets a list now — a retirement at
+// any of them used to take that provider (and, for Gemini, Auto-caption) down
+// until someone noticed and redeployed.
+var MODEL_FALLBACKS = {
+  claude:   ['claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-3-7-sonnet-latest'],
+  openai:   ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
+  gemini:   ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-2.5-flash'],
+  grok:     ['grok-4', 'grok-3'],
+  deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+};
+
+// Kept as its own name because the audio path (Auto-caption) reads it directly.
+var GEMINI_MODEL_FALLBACKS = MODEL_FALLBACKS.gemini;
 
 // ---------------------------------------------------------------- songwriter system prompt (restored from v8)
 
@@ -247,21 +261,23 @@ function callAI(provider, prompt) {
 
   if (provider === 'claude')   return callAnthropic(key, model, prompt, web);
   if (provider === 'gemini')   return callGemini(key, model, prompt, web);
-  if (provider === 'grok')     return callOpenAiStyle('https://api.x.ai/v1/chat/completions', key, model, prompt, label, web ? { search_parameters: { mode: 'auto' } } : null);
-  if (provider === 'deepseek') return callOpenAiStyle('https://api.deepseek.com/chat/completions', key, model, prompt, label, null);
-  return callOpenAiStyle('https://api.openai.com/v1/chat/completions', key, model, prompt, label, null);
+  if (provider === 'grok')     return callOpenAiStyle('https://api.x.ai/v1/chat/completions', key, model, prompt, label, web ? { search_parameters: { mode: 'auto' } } : null, 'grok');
+  if (provider === 'deepseek') return callOpenAiStyle('https://api.deepseek.com/chat/completions', key, model, prompt, label, null, 'deepseek');
+  return callOpenAiStyle('https://api.openai.com/v1/chat/completions', key, model, prompt, label, null, 'openai');
 }
 
 function callAnthropic(key, model, prompt, webResearch) {
-  var payload = { model: model, max_tokens: 8000, messages: [{ role: 'user', content: prompt }] };
-  if (webResearch) payload.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
-  var data = aiFetch('https://api.anthropic.com/v1/messages', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  }, 'Claude');
+  var data = resilientModelCall('claude', model, 'Claude', 3, function (m) {
+    var payload = { model: m, max_tokens: 8000, messages: [{ role: 'user', content: prompt }] };
+    if (webResearch) payload.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
+    return aiFetch('https://api.anthropic.com/v1/messages', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    }, 'Claude');
+  });
   var parts = [];
   (data.content || []).forEach(function (blk) { if (blk.type === 'text' && blk.text) parts.push(blk.text); });
   if (!parts.length) throw new Error('Claude sent back an empty answer — try again in a moment.');
@@ -282,19 +298,86 @@ function callGemini(key, model, prompt, webResearch) {
 }
 
 // OpenAI-compatible chat API — used by ChatGPT, Grok and DeepSeek.
-function callOpenAiStyle(url, key, model, prompt, label, extraPayload) {
-  var payload = { model: model, messages: [{ role: 'user', content: prompt }] };
-  if (extraPayload) for (var k in extraPayload) payload[k] = extraPayload[k];
-  var data = aiFetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + key },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  }, label);
+function callOpenAiStyle(url, key, model, prompt, label, extraPayload, providerId) {
+  var data = resilientModelCall(providerId, model, label, 3, function (m) {
+    var payload = { model: m, messages: [{ role: 'user', content: prompt }] };
+    if (extraPayload) for (var k in extraPayload) payload[k] = extraPayload[k];
+    return aiFetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + key },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    }, label);
+  });
   var text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
   if (!text) throw new Error(label + ' sent back an empty answer — try again in a moment.');
   return text;
+}
+
+// A passing wobble at any AI provider — 429 (rate limit), 500 (hiccup), 503
+// ("high demand"), 529 (Anthropic's overloaded) — clears on its own within a
+// second or two, so it is worth a short pause and another go. A bad key or a
+// malformed request is NOT transient and must never be retried.
+// A blown *quota* is a 429 too but does not clear in seconds, so it is called
+// out separately and treated as "this provider is done for now".
+function isTransientAiError(msg) {
+  msg = String(msg || '');
+  if (isQuotaError(msg)) return false;
+  return /\((429|500|502|503|529)\)/.test(msg)
+    || /high demand|overloaded|unavailable|temporarily|try again|rate limit|resource[_ ]?exhausted/i.test(msg);
+}
+
+function isQuotaError(msg) {
+  return /quota|billing|insufficient|exceeded your current/i.test(String(msg || ''));
+}
+
+// A provider saying "that model does not exist / is no longer available". Both
+// Google (404) and DeepSeek (400 "The supported API model names are …") do
+// this when they retire a name, and it is the single most common way this app
+// silently stops working months after it was last touched.
+function isRetiredModelError(msg) {
+  msg = String(msg || '');
+  return (/\((400|404)\)/.test(msg) && /model/i.test(msg))
+    || /no longer available|not found|unsupported model|supported api model names/i.test(msg);
+}
+
+/**
+ * One AI call, made resilient the same way for every provider.
+ *   · temporary overload / rate-limit: wait and retry the SAME model with a
+ *     growing pause (1s, then 2s); if it stays jammed, move to the next model;
+ *   · a retired / unknown model name: walk that provider's MODEL_FALLBACKS;
+ *   · anything else (bad key, blown quota, malformed request): throw at once —
+ *     papering over those just wastes the owner's time.
+ * `maxCalls` caps total network calls so even a bad day stays inside Apps
+ * Script's 6-minute execution limit.
+ */
+function resilientModelCall(providerId, model, label, maxCalls, doCall) {
+  var names = [model].concat(MODEL_FALLBACKS[providerId] || []);
+  var tried = {};
+  var lastErr = null;
+  var calls = 0;
+  for (var i = 0; i < names.length && calls < maxCalls; i++) {
+    var m = names[i];
+    if (!m || tried[m]) continue;
+    tried[m] = true;
+    for (var attempt = 0; attempt < 3 && calls < maxCalls; attempt++) {
+      calls++;
+      try {
+        return doCall(m);
+      } catch (err) {
+        var msg = String((err && err.message) || '');
+        lastErr = err;
+        if (isTransientAiError(msg)) {
+          if (attempt < 2 && calls < maxCalls) { Utilities.sleep(1000 * Math.pow(2, attempt)); continue; }
+          break; // still jammed — try the next fallback model
+        }
+        if (isRetiredModelError(msg)) break; // retired name — next fallback
+        throw err; // real error — don't paper over it
+      }
+    }
+  }
+  throw lastErr || new Error('The ' + label + ' service could not be reached — try again in a moment.');
 }
 
 function aiFetch(url, options, label) {
@@ -440,10 +523,9 @@ function callGeminiAudio(key, model, prompt, audioBase64, mimeType) {
 // (rate limit), or 500 (a transient hiccup) — every one of those clears on its
 // own within a second or two, so they're worth a short pause and a retry. A bad
 // key or a malformed request is NOT transient and must not be retried.
+// Now shared with every other provider through isTransientAiError.
 function isTransientGeminiError(msg) {
-  msg = String(msg || '');
-  return /\((429|500|503)\)/.test(msg)
-    || /high demand|overloaded|unavailable|temporarily|try again|rate limit|resource[_ ]?exhausted/i.test(msg);
+  return isTransientAiError(msg);
 }
 
 // One Gemini generateContent call, made resilient so Auto-caption's cloud backup
@@ -458,39 +540,17 @@ function isTransientGeminiError(msg) {
 //   · anything else (bad key, malformed request): real — throw it straight away.
 // A total call budget keeps the slow audio path comfortably inside Apps
 // Script's 6-minute execution limit even if everything is having a bad day.
+// The logic itself now lives in resilientModelCall, shared with every provider.
 function geminiGenerate(key, model, payload) {
-  var names = [model].concat(GEMINI_MODEL_FALLBACKS);
-  var tried = {};
-  var lastErr = null;
-  var calls = 0;
-  var MAX_CALLS = 5; // safety cap on total network calls (audio calls are slow)
-  for (var i = 0; i < names.length && calls < MAX_CALLS; i++) {
-    var m = names[i];
-    if (!m || tried[m]) continue;
-    tried[m] = true;
-    for (var attempt = 0; attempt < 3 && calls < MAX_CALLS; attempt++) {
-      calls++;
-      try {
-        return aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
-          method: 'post',
-          contentType: 'application/json',
-          headers: { 'x-goog-api-key': key },
-          payload: JSON.stringify(payload),
-          muteHttpExceptions: true,
-        }, 'Gemini');
-      } catch (err) {
-        var msg = String((err && err.message) || '');
-        lastErr = err;
-        if (isTransientGeminiError(msg)) {
-          if (attempt < 2 && calls < MAX_CALLS) { Utilities.sleep(1000 * Math.pow(2, attempt)); continue; }
-          break; // this model keeps overloading — try the next fallback model
-        }
-        if (msg.indexOf('(404)') !== -1 && /model/i.test(msg)) break; // retired model — next fallback
-        throw err; // bad key / malformed request — real, don't paper over it
-      }
-    }
-  }
-  throw lastErr;
+  return resilientModelCall('gemini', model, 'Gemini', 5, function (m) {
+    return aiFetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': key },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    }, 'Gemini');
+  });
 }
 
 /**
