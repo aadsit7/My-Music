@@ -13,6 +13,20 @@ writes) **plus**:
   show the song's name.
 - **`list_videos`** — returns everything on the Videos tab for the app's
   "My videos" list.
+- **Files attached to a song** (`save_song_file`, `list_song_files`,
+  `get_song_file`, `delete_song_file`) — any file you add to a saved song in
+  **My songs** (music, video, images, a scanned lyric sheet, anything) is
+  stored in a Google Drive folder called **"Tune Studio Files"** (created
+  automatically) with one sub-folder per song, named `<Song ID> - <Title>`, and
+  logged on a **"Files"** tab in your Sheet (also created automatically) with
+  columns: File ID, Song ID, Date Created, File Name, File Type, Size (bytes),
+  Drive Link, Drive File ID, Notes, Song Title. `get_song_file` hands a file's
+  contents back so the app can show, play and download it inside the song —
+  nothing has to be shared publicly to be viewable. Each file has to be under
+  about 30 MB (the limit on what Apps Script can carry in one request, and it's
+  deliberately the same in both directions, so a file that went up can always
+  come back). Deleting a file sends the Drive copy to the trash, so it's
+  recoverable for a while. Deleting a *song* leaves its files alone.
 - **`transcribe_audio`** — the Auto-caption feature: the app sends a song's
   audio (up to ~13 MB — a 3-minute MP3 is ~4 MB) and Gemini returns timed
   lyric lines. When the song's lyrics are already known they ride along and

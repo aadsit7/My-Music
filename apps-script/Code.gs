@@ -8,6 +8,9 @@
  *   · saves / lists / updates / deletes songs in the "My Songs" sheet tab,
  *   · saves exported lyric videos to the "Tune Studio Videos" Drive folder
  *     and logs them in the "Videos" sheet tab,
+ *   · keeps files attached to a song (music, video, images, anything) in the
+ *     "Tune Studio Files" Drive folder and logs them in the "Files" sheet tab,
+ *     handing them back for viewing and downloading in the app,
  *   · auto-captions songs: listens to an uploaded audio file with Gemini and
  *     returns timed lyric lines (transcribe_audio).
  *
@@ -34,6 +37,23 @@ var VIDEOS_FOLDER_NAME = 'Tune Studio Videos';
 // "Title" rides along as an extra last column so the app's My Videos list can
 // show the song's name without a second lookup.
 var VIDEOS_HEADERS = ['Video ID', 'Song ID', 'Date Created', 'Caption Style', 'Drive Link', 'YouTube Link', 'Notes', 'Title'];
+
+// Files attached to a song (music, video, images, lyric sheets, anything).
+// They live in Drive under one parent folder with a sub-folder per song, so the
+// owner's Drive stays readable when browsed by hand. "Song Title" rides along
+// as an extra column so the app can label a file without a second lookup.
+var FILES_SHEET_NAME = 'Files';
+var FILES_FOLDER_NAME = 'Tune Studio Files';
+var FILES_HEADERS = ['File ID', 'Song ID', 'Date Created', 'File Name', 'File Type', 'Size (bytes)', 'Drive Link', 'Drive File ID', 'Notes', 'Song Title'];
+
+// Per-file ceiling, in base64 characters, for both directions:
+//   · uploading  — Apps Script accepts a POST of roughly 50 MB,
+//   · fetching back for in-app preview/download — a reply is capped the same way.
+// 40 MB of base64 is about 30 MB of real file, which leaves clear headroom on
+// both limits. Kept deliberately symmetric: a file that went up can always
+// come back down again.
+var SONG_FILE_MAX_BASE64 = 40 * 1024 * 1024;
+var SONG_FILE_MAX_BYTES = 30 * 1024 * 1024;
 
 var PROVIDER_LABELS = { claude: 'Claude', openai: 'ChatGPT', gemini: 'Gemini', grok: 'Grok', deepseek: 'DeepSeek' };
 
@@ -171,6 +191,10 @@ function route(body) {
     case 'delete_original': return withLock(function () { return handleDeleteOriginal(data); });
     case 'save_video':      return withLock(function () { return handleSaveVideo(data); });
     case 'list_videos':     return handleListVideos();
+    case 'save_song_file':   return withLock(function () { return handleSaveSongFile(data); });
+    case 'list_song_files':  return handleListSongFiles(data);
+    case 'get_song_file':    return handleGetSongFile(data);
+    case 'delete_song_file': return withLock(function () { return handleDeleteSongFile(data); });
     case 'transcribe_audio': return handleTranscribeAudio(data);
     default:
       throw new Error('Unknown request type: ' + type);
@@ -711,6 +735,208 @@ function handleListVideos() {
   return { ok: true, videos: videos };
 }
 
+// ------------------------------------------------- song files (Drive + Files tab)
+
+/**
+ * File one uploaded attachment for a song: the bytes go into
+ * "Tune Studio Files / <Song ID> - <Title>" in Drive, and a row goes on the
+ * sheet's Files tab so the app can list it again later.
+ *
+ * Anything is allowed — music, video, images, a scanned lyric sheet — so no
+ * MIME whitelist here; the app decides what it can preview.
+ */
+function handleSaveSongFile(data) {
+  var songId = String(data.songId || '').trim();
+  if (!songId) throw new Error('Save the song first — a file has to belong to a saved song.');
+
+  var base64 = String(data.fileBase64 || '');
+  if (!base64) throw new Error('No file data arrived — pick the file again.');
+  if (base64.length > SONG_FILE_MAX_BASE64) {
+    throw new Error('That file is too big to send in one go — each file has to be under about ' + Math.round(SONG_FILE_MAX_BYTES / (1024 * 1024)) + ' MB.');
+  }
+
+  var bytes;
+  try {
+    bytes = Utilities.base64Decode(base64);
+  } catch (err) {
+    throw new Error('The file arrived garbled — try adding it again.');
+  }
+  if (!bytes || !bytes.length) throw new Error('The file arrived empty — try adding it again.');
+
+  var fileName = safeFileName(data.fileName) || 'Attachment';
+  var mimeType = String(data.mimeType || '').trim() || 'application/octet-stream';
+  var songTitle = String(data.songTitle || '');
+
+  var folder = getOrCreateSongFilesFolder(songId, songTitle);
+  var file = folder.createFile(Utilities.newBlob(bytes, mimeType, fileName));
+
+  var sheet = getOrCreateSheet(FILES_SHEET_NAME, FILES_HEADERS);
+  var cols = headerColumns(sheet, FILES_HEADERS);
+  var id = nextId('FILE', sheet, cols['File ID']);
+  var row = newRowFor(sheet);
+  row[cols['File ID']] = id;
+  row[cols['Song ID']] = songId;
+  row[cols['Date Created']] = todayString();
+  row[cols['File Name']] = fileName;
+  row[cols['File Type']] = mimeType;
+  row[cols['Size (bytes)']] = bytes.length;
+  row[cols['Drive Link']] = file.getUrl();
+  row[cols['Drive File ID']] = file.getId();
+  row[cols['Notes']] = String(data.notes || '');
+  row[cols['Song Title']] = songTitle;
+  sheet.appendRow(row);
+
+  return {
+    ok: true,
+    file: {
+      id: id,
+      songId: songId,
+      date: todayString(),
+      name: fileName,
+      mimeType: mimeType,
+      size: bytes.length,
+      driveLink: file.getUrl(),
+      driveFileId: file.getId(),
+      notes: String(data.notes || ''),
+      songTitle: songTitle,
+    },
+  };
+}
+
+/**
+ * Every attachment, or just one song's when data.songId is given. Metadata
+ * only — the bytes are fetched separately (get_song_file), so listing every
+ * file for every song stays a small, quick call.
+ */
+function handleListSongFiles(data) {
+  var want = String((data && data.songId) || '').trim();
+  var sheet = getOrCreateSheet(FILES_SHEET_NAME, FILES_HEADERS);
+  var cols = headerColumns(sheet, FILES_HEADERS);
+  var files = dataRows(sheet).map(function (r) {
+    return {
+      id: cellString(r[cols['File ID']]),
+      songId: cellString(r[cols['Song ID']]),
+      date: cellString(r[cols['Date Created']]),
+      name: cellString(r[cols['File Name']]),
+      mimeType: cellString(r[cols['File Type']]),
+      size: Number(r[cols['Size (bytes)']]) || 0,
+      driveLink: cellString(r[cols['Drive Link']]),
+      driveFileId: cellString(r[cols['Drive File ID']]),
+      notes: cellString(r[cols['Notes']]),
+      songTitle: cellString(r[cols['Song Title']]),
+    };
+  }).filter(function (f) {
+    if (!f.id && !f.driveFileId) return false;
+    return !want || f.songId === want;
+  });
+  return { ok: true, files: files };
+}
+
+/**
+ * Hand one attachment's bytes back as base64 so the app can show/play it
+ * inside the song and offer a real download — no Drive sign-in needed in the
+ * browser, and nothing has to be shared publicly to be viewable.
+ */
+function handleGetSongFile(data) {
+  var id = String((data && data.id) || '').trim();
+  if (!id) throw new Error('Which file? No file id arrived.');
+
+  var sheet = getOrCreateSheet(FILES_SHEET_NAME, FILES_HEADERS);
+  var cols = headerColumns(sheet, FILES_HEADERS);
+  var rowIndex = findRowById(sheet, cols['File ID'], id);
+  if (rowIndex === -1) throw new Error('Couldn’t find that file in the sheet — refresh the song’s files and try again.');
+
+  var row = sheet.getRange(rowIndex, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0];
+  var driveFileId = cellString(row[cols['Drive File ID']]);
+  if (!driveFileId) throw new Error('That file has no Google Drive id on the sheet, so it can’t be opened here. Use its Drive link instead.');
+
+  var file;
+  try {
+    file = DriveApp.getFileById(driveFileId);
+  } catch (err) {
+    throw new Error('That file is no longer in Google Drive — it may have been deleted or moved out of the “' + FILES_FOLDER_NAME + '” folder.');
+  }
+  if (file.isTrashed()) throw new Error('That file is in the Google Drive trash — restore it in Drive, then try again.');
+
+  var blob = file.getBlob();
+  var bytes = blob.getBytes();
+  if (bytes.length > SONG_FILE_MAX_BYTES) {
+    throw new Error('That file is ' + Math.round(bytes.length / (1024 * 1024)) + ' MB — too big to open inside the app. Use “Open in Drive” to view or download it there.');
+  }
+
+  return {
+    ok: true,
+    id: id,
+    name: cellString(row[cols['File Name']]) || file.getName(),
+    mimeType: cellString(row[cols['File Type']]) || blob.getContentType() || 'application/octet-stream',
+    size: bytes.length,
+    base64: Utilities.base64Encode(bytes),
+  };
+}
+
+/**
+ * Remove one attachment: the Drive file goes to the trash (recoverable for a
+ * while, unlike a hard delete) and its row leaves the Files tab. A Drive file
+ * that has already been deleted by hand doesn't block the row's removal.
+ */
+function handleDeleteSongFile(data) {
+  var id = String((data && data.id) || '').trim();
+  if (!id) throw new Error('Which file? No file id arrived.');
+
+  var sheet = getOrCreateSheet(FILES_SHEET_NAME, FILES_HEADERS);
+  var cols = headerColumns(sheet, FILES_HEADERS);
+  var rowIndex = findRowById(sheet, cols['File ID'], id);
+  if (rowIndex === -1) throw new Error('Couldn’t find that file in the sheet — refresh the song’s files and try again.');
+
+  var driveFileId = cellString(sheet.getRange(rowIndex, cols['Drive File ID'] + 1).getValue());
+  if (driveFileId) {
+    try { DriveApp.getFileById(driveFileId).setTrashed(true); } catch (err) {}
+  }
+  sheet.deleteRow(rowIndex);
+  return { ok: true, id: id };
+}
+
+/**
+ * "Tune Studio Files / <Song ID> - <Title>", created on demand.
+ * The sub-folder is matched on the song ID prefix, never the whole name, so
+ * renaming a song later still finds its existing folder instead of starting a
+ * second one. Trashed matches are skipped for the same reason as the videos
+ * folder — filing into the trash loses the uploads for good.
+ */
+function getOrCreateSongFilesFolder(songId, songTitle) {
+  var parent = null;
+  var it = DriveApp.getFoldersByName(FILES_FOLDER_NAME);
+  while (it.hasNext()) {
+    var candidate = it.next();
+    if (!candidate.isTrashed()) { parent = candidate; break; }
+  }
+  if (!parent) parent = DriveApp.createFolder(FILES_FOLDER_NAME);
+
+  var prefix = String(songId || '').trim();
+  if (!prefix) return parent;
+
+  var subs = parent.getFolders();
+  while (subs.hasNext()) {
+    var sub = subs.next();
+    if (sub.isTrashed()) continue;
+    var name = sub.getName();
+    if (name === prefix || name.indexOf(prefix + ' ') === 0) return sub;
+  }
+  var title = safeFileName(songTitle);
+  return parent.createFolder(prefix + (title ? ' - ' + title : ''));
+}
+
+// Drive is happy with most characters, but the slashes and colons a song title
+// can contain make for confusing file names — and an over-long name is unusable
+// in a list. Keep the extension intact by trimming the front part only.
+function safeFileName(raw) {
+  var name = String(raw || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (name.length <= 120) return name;
+  var dot = name.lastIndexOf('.');
+  var ext = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : '';
+  return name.slice(0, 120 - ext.length).trim() + ext;
+}
+
 function getOrCreateVideosFolder() {
   // getFoldersByName also returns folders sitting in the trash — if the owner
   // deleted "Tune Studio Videos", saving into that match would file videos in
@@ -929,6 +1155,12 @@ function TEST_backend() {
 
   var folder = getOrCreateVideosFolder();
   report.push('Drive folder "' + VIDEOS_FOLDER_NAME + '": ready ✓ (' + folder.getUrl() + ')');
+
+  var files = getOrCreateSheet(FILES_SHEET_NAME, FILES_HEADERS);
+  report.push('"' + FILES_SHEET_NAME + '" tab: ready (' + Math.max(0, files.getLastRow() - 1) + ' song files logged) ✓');
+
+  var filesFolder = getOrCreateSongFilesFolder('', '');
+  report.push('Drive folder "' + FILES_FOLDER_NAME + '": ready ✓ (' + filesFolder.getUrl() + ')');
 
   var status = handleStatus(getProp('AI_TOKEN'));
   var ready = [];

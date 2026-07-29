@@ -95,6 +95,51 @@ needs touching for app changes.
    lyrics and style by hand — no AI needed; Save writes it via the `original`
    endpoint (like the Songwriter's Save) then folds it into the list as a
    normal saved song. Delete and per-section AI are gated off until it's saved.
+   - **Files kept with a song** (a **"Files"** box at the bottom of the song
+     detail): anything that belongs with the song — the finished track, a video,
+     cover art, a photo of a handwritten lyric sheet. The file goes to Google
+     Drive (folder **"Tune Studio Files"**, one sub-folder per song named
+     `<Song ID> - <Title>`) and a row goes on the Sheet's **"Files"** tab, so
+     it's still there next time the song is opened, on any device. Endpoints:
+     `save_song_file` / `list_song_files` / `get_song_file` /
+     `delete_song_file`.
+     **One metadata call covers the whole library** — `loadMyFiles` runs once
+     when the tab opens (`state.myFiles`, a flat list for every song), so
+     opening a song needs no fetch and the song *list* can show a per-song file
+     count (`myFileCounts` in `renderVals`). Bytes are only moved when a file is
+     actually viewed or downloaded.
+     **Viewing happens inside the song**: photos, songs, videos, PDFs and text
+     files (`MY_FILE_KINDS`) open under their row — one at a time — by fetching
+     the bytes back through `get_song_file` into a blob URL cached on the
+     instance (`this.myFileBlobs`, dropped by `myDropFileBlobs` whenever a
+     different song is opened, since a few of these run to tens of MB). Going
+     through the backend rather than a Drive link is deliberate: **nothing has
+     to be shared publicly to be viewable**, and no Google sign-in is needed in
+     the browser. Media addresses go in through `data-src` and are copied to
+     `src` by `syncMediaSrc()` for the same reason the two iframes do it —
+     `src="{{ … }}"` makes the browser fetch the literal placeholder and paints
+     a red "[bundle] error" panel over the app; the comparison guard also stops
+     a re-render restarting a song mid-listen.
+     Anything else (a .zip, say) still uploads, lists and downloads — it just
+     gets no View button. **Download** saves the fetched blob with its real
+     name; on a phone whose share sheet takes files the sheet is offered
+     instead (the route into Photos/Files), but only when the bytes are already
+     in hand — fetching first uses up the tap a share needs, so the first tap
+     on an un-fetched file just downloads it and a second one opens the sheet.
+     Uploads are **sequential**, several files per pick, progress written
+     straight into `data-my-file-pct` (a re-render per percent would rebuild the
+     card — same reason as the export progress and sync clock), and never
+     retried: a repeat could file a second copy.
+     **30 MB per file** (`MY_FILE_MAX_BYTES`), checked in the browser before
+     anything is sent and again in the backend. The limit is deliberately the
+     same in both directions — a file that went up can always come back — and
+     the note points anything bigger at the Drive folder by hand.
+     The whole box is gated on the song being **saved** (a file is filed under
+     the song's Sheet ID), same as Delete and the per-section AI; a new song
+     shows a plain-English "save it first" note instead.
+     Removing a file sends the Drive copy to the **trash**, not a hard delete.
+     Deleting a *song* leaves its files alone — an upload is never thrown away
+     as a side effect — and the confirm box says so when there are any.
 6. **Settings** — AI provider picker, access token, provider status, plus
    **"Test the AI connections"** (`testProviders`): the Ready / No key badge
    only ever meant "a key is saved", which is not the same as "this works" —
@@ -486,8 +531,13 @@ all real, all measured:
    mount so the chain is known before it is needed.
 
 **Never retry a write.** `apiRetryable` allows repeats only for reads and AI
-calls (all pure). `original`, `update_original`, `delete_original` and
-`save_video` get exactly one attempt, so a slow save can't become two rows.
+calls (all pure). `original`, `update_original`, `delete_original`,
+`save_video`, `save_song_file` and `delete_song_file` get exactly one attempt,
+so a slow save can't become two rows (or two copies of an uploaded file).
+`get_song_file` and `list_song_files` are reads, so they retry — which means a
+genuinely dead file costs three attempts before the error lands; that's the
+right trade for a call that may carry 30 MB over a phone connection, and it has
+its own longer timeout / deadline (`apiTimeoutFor`, `apiDeadlineFor`).
 
 Busy cards use `aiJobStart()` / `aiJobStop(signal)`: the job owns the
 `AbortController` (so **Cancel** genuinely aborts) and ticks elapsed seconds
@@ -512,7 +562,8 @@ what they had typed.
   **New version** on the existing deployment (same URL).
 - Request types: `status`, `ai_search`, `ai_write`, `original`,
   `list_originals`, `update_original`, `delete_original`, `save_video`,
-  `list_videos`, `transcribe_audio`. Body `{ type, data, provider, token }` →
+  `list_videos`, `transcribe_audio`, `save_song_file`, `list_song_files`,
+  `get_song_file`, `delete_song_file`. Body `{ type, data, provider, token }` →
   `{ ok: true, … }`.
 - `ai_write` wraps every request in `SONGWRITER_SYSTEM` (the "songwriter
   brain": hit-quality craft rules plus the Suno output contract — TITLE: /
@@ -571,7 +622,13 @@ what they had typed.
   can't cause duplicate IDs. Sheet writes go through `withLock`; the optional
   `AI_TOKEN` script property gates every type except `status`.
 - Videos land in the Drive folder **"Tune Studio Videos"** and the Sheet tab
-  **"Videos"**; both are created automatically when missing.
+  **"Videos"**; both are created automatically when missing. Files attached to a
+  song land in **"Tune Studio Files"** (a sub-folder per song) and the **"Files"**
+  tab — also auto-created. The song sub-folder is matched on the **Song ID
+  prefix**, never the whole name, so renaming a song later finds its existing
+  folder instead of starting a second one. File names are pushed through
+  `safeFileName` (illegal characters out, 120 chars max, extension kept).
+  `TEST_backend` reports both new items alongside the video ones.
 
 ## Testing notes
 
@@ -596,6 +653,19 @@ what they had typed.
 - Export was verified in Chromium (Chrome). Firefox/Edge pass the feature
   detection on paper (WebM + captureStream + MediaRecorder) but were not
   test-run — say so honestly in checklists rather than claiming otherwise.
+- **Files kept with a song** were verified two ways, both with the Apps Script
+  endpoint intercepted and answered by an in-memory stand-in: in headless
+  Chromium (all 7 tabs; adding several files at once; a photo shown, a song
+  played and a text file opened inside the song; a real download with the right
+  file name; removing a file; the over-30 MB refusal; a rejected upload; a file
+  missing from Drive; cancelling a removal; the "save the song first" gate), and
+  by running `Code.gs` itself under stand-ins for DriveApp / SpreadsheetApp /
+  Utilities (folder layout, sub-folder reuse after a rename, byte-for-byte
+  round trip, trash-not-delete, awkward and over-long file names, oversized
+  payload refused before any write, a Drive file deleted by hand still clearing
+  its row, no ID reuse). iPhone Safari could not be tested here — in particular
+  the share-sheet route in `myDownloadFile` and whether an inline `<video>`
+  plays a blob there.
 - The local caption engine was verified end to end in headless Chromium
   (espeak-generated test songs with known line times; word timestamps and
   the aligner checked against ground truth). Heads-up for future test rigs:
