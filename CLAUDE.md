@@ -140,6 +140,17 @@ needs touching for app changes.
      Removing a file sends the Drive copy to the **trash**, not a hard delete.
      Deleting a *song* leaves its files alone — an upload is never thrown away
      as a side effect — and the confirm box says so when there are any.
+     **When the deployed script is older than the app** (the very first thing
+     that happened in the wild: the owner's Apps Script still predated this
+     feature, so all four endpoints answered `Unknown request type`), the box
+     says so and gives the redeploy steps — `state.myFilesOutdated`, set from
+     `loadMyFiles` and from a refused upload, hides the pointless "Add a file"
+     button (`myFilesCanAdd`, a separate gate from `myFilesCanAttach` so the
+     explanation itself is never hidden with it) and suppresses the "Checking
+     Google Drive…" note. Every per-file failure goes through
+     `myFileFailMessage`, so an out-of-date script explains itself there too
+     instead of looking like a broken file. See the `apiRequest` section for why
+     this is classified as its own kind of failure.
 6. **Settings** — AI provider picker, access token, provider status, plus
    **"Test the AI connections"** (`testProviders`): the Ready / No key badge
    only ever meant "a key is saved", which is not the same as "this works" —
@@ -148,6 +159,28 @@ needs touching for app changes.
    a one-line real request to each AI that has a key (failover deliberately
    OFF — the point is to hear from *that* one) and reports what actually came
    back, per provider.
+   Above it sits **"Google Sheet connection"** (`testSheet`, steps in
+   `SHEET_TEST_STEPS`), for the complaint that used to be unanswerable — "it
+   isn't connecting to my Sheet" — because every way of failing looked
+   identical: a spinner, then one short red line. Five separate things sit
+   between the owner and their songs, each needing a different fix, so the test
+   walks them one at a time and names the one that broke:
+   **online** (the device itself) → **reach** (a plain GET of the script's
+   address, via `sheetPing` — deliberately not `apiRequest`: no retries, no
+   failover, just one clean yes/no, cache-busted so a stale cached answer can't
+   sail through) → **sheet** (the app's real POST, which Apps Script answers
+   with a redirect the browser must follow and which a blocker or VPN stops even
+   when a plain read works) → **songs** (the sheet tab itself) →
+   **version** (is the deployed script as new as this app?).
+   That last step exists because the app updates itself on every page load while
+   the Apps Script only changes when the owner deploys it by hand, so the two
+   drift apart — which is how the first four steps can all pass green and a
+   newer feature still fails. It asks with the newest request type there is
+   (`list_song_files`); an older script answers `Unknown request type` and gets
+   the copy-and-paste redeploy steps instead of a shrug. `sheetFailMessage`
+   turns each failure into one sentence the owner can act on, and `reached`
+   changes the advice for the POST step completely (address fine + POST blocked
+   ⇒ blocker/VPN, not a dead deployment).
 7. **Edit Video** — lyric-video maker:
    - **Staged editor (`state.evStage`, `onEvStage`)**: once a song is loaded
      and `evStep === 'ready'`, the controls are split into two focused stages
@@ -522,8 +555,9 @@ all real, all measured:
    used to end the request. Retried now with a growing pause; after a
    *timeout* the pause is skipped (the wait already happened).
 3. **The picked AI being out of action.** `apiErrorKind` sorts failures into
-   `fatal` (bad token — stop), `provider` (no key, quota gone, retired model —
-   a different AI may work) and `transient` (repeat). On a `provider` error an
+   `fatal` (bad token — stop), `outdated` (the deployed script has never heard
+   of this request — stop, see below), `provider` (no key, quota gone, retired
+   model — a different AI may work) and `transient` (repeat). On a `provider` error an
    `ai_write` / `ai_search` request is handed to the next AI that has a key
    (`apiProviderChain`, ordered by `PROVIDERS`, filtered by the `status`
    call's key map). **This is the part that works with the backend exactly as
@@ -538,6 +572,27 @@ so a slow save can't become two rows (or two copies of an uploaded file).
 genuinely dead file costs three attempts before the error lands; that's the
 right trade for a call that may carry 30 MB over a phone connection, and it has
 its own longer timeout / deadline (`apiTimeoutFor`, `apiDeadlineFor`).
+
+**Never retry an out-of-date script, and never blame the internet for it.**
+The app half updates itself on every page load; the Google half only changes
+when the owner pastes the new `Code.gs` in and deploys it. So the app routinely
+runs *ahead* of its backend, and the backend answers anything it doesn't
+recognise with `Unknown request type: <t>`. That is a permanent answer:
+`apiErrorKind` returns `outdated` and the retry loop throws at once, alongside
+`fatal`. Before this, an unknown type fell through to `transient` and was
+repeated for the whole ~3-minute budget — which is exactly why the Files box sat
+on "Loading…" for ever instead of saying what was wrong. `apiOutdatedBackend`
+tests for it and `apiOutdatedMessage(what)` writes the one message, so every
+caller says the same thing and gives the same steps.
+The **wording** matters as much as the classification. The upload path is an
+`XMLHttpRequest` (for progress), and a browser reports "the request never
+completed" identically for a dropped connection and for a request something
+blocked on the way out — it is not allowed to say which. `xhr.onerror` used to
+assert *"couldn't reach Google — check your internet connection"*, which sent
+the owner checking Wi-Fi for a fault that was never there while the real fix was
+two minutes of copy-and-paste. It now names both possibilities and points at
+Settings → "Test the connection", the one screen that can tell them apart.
+Never re-introduce a message that states a cause the browser hasn't given us.
 
 Busy cards use `aiJobStart()` / `aiJobStop(signal)`: the job owns the
 `AbortController` (so **Cancel** genuinely aborts) and ticks elapsed seconds
