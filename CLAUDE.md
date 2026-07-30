@@ -385,6 +385,47 @@ needs touching for app changes.
      as to button presses. Auto-start invokes the LOCAL engine (first use
      triggers the one-time engine download); the cloud path only ever starts
      from its failure-card button.
+     **Background guard (the "keeps running when I switch apps" fix)**: a
+     caption run must survive the owner leaving — switching the app's own
+     tabs, switching iPhone apps, the screen locking, the desktop tab being
+     hidden. Desktops already keep a hidden tab's worker crunching; PHONES
+     SUSPEND the whole page moments after it leaves the screen, and the one
+     thing a page may keep doing in the background is play audio — the same
+     allowance every music web app runs on. So `evBgGuardStart` (called from
+     `evAcBegin`, which local, onset-fallback and cloud runs all share, so
+     the guard spans engine handoffs seamlessly) holds three layers for
+     exactly the length of a run: (1) a looping keep-alive `<audio>` playing
+     generated SILENCE (built once in `evBgKeepEl` — 1 s of 8-bit midpoint
+     samples; never `muted`, because a muted element doesn't count as
+     "playing audio" while silent samples do, and nothing is ever heard);
+     (2) a screen wake lock (export's exact pattern, re-requested on every
+     return to visibility) so the phone doesn't auto-lock while the owner
+     watches the spinner; (3) a 2 s watchdog that replays the keep-alive
+     after an interruption (a phone call, iOS pausing media on app switch)
+     and calls `evBgGuardStop` the moment `evAcJob` dies — ANY way it dies
+     (finish, fail, Cancel, loading another song, Start over, plain export),
+     so the guard can never outlive a run even if a future kill-site forgets
+     to stop it. Phones only allow audio to start from a real tap, and
+     auto-caption starts itself with no tap in hand — so the FIRST tap
+     anywhere in the app blesses the player (`evBgArmUnlock`, armed at mount
+     on touch devices: play, then straight back to pause). During a run,
+     `navigator.audioSession.type = 'playback'` is declared where Safari
+     offers the API (restored on stop), and Media Session metadata names the
+     lock-screen card honestly ("Tune Studio — Auto-captioning your
+     song…"). The keep-alive only engages on touch devices (`EV_BG_TOUCH`) —
+     a desktop tab would just show a mystery speaker icon for no benefit —
+     while the wake lock and watchdog run everywhere. Progress survives
+     leaving: `evAcSetPct` remembers the last fraction on the instance
+     (`evAcFrac`) and `componentDidUpdateEditVideo` repaints it whenever the
+     busy card is up, so coming back from another tab never shows a lying
+     0% (the card is also refreshed by the guard's visibility handler).
+     Best-effort BY DESIGN: a browser that refuses a layer simply suspends
+     the page as before, and the run resumes exactly where it froze when
+     the page comes back — nothing is lost either way; closing the browser
+     still ends the run, and the busy card tells the owner both facts in one
+     line. iPhone Safari itself is untested in this environment (standing
+     caveat) — these are the layers real music web apps rely on, but confirm
+     on a real iPhone before calling it done there.
    - **Background photo**: "Add a background photo" in the styling panel takes
      any picture (iPhone camera roll included — iOS hands HEIC over as JPEG);
      it's pre-cropped once into a 1920×1080 cover-fit canvas on the instance
@@ -721,6 +762,17 @@ what they had typed.
   its row, no ID reuse). iPhone Safari could not be tested here — in particular
   the share-sheet route in `myDownloadFile` and whether an inline `<video>`
   plays a blob there.
+- The background guard was verified in headless Chromium in two contexts
+  (desktop, and touch-emulated with `--autoplay-policy=user-gesture-required`
+  so the tap-blessing path really runs), with the jsDelivr URL intercepted and
+  a fake transformers.js served with slow, controllable progress: a run
+  survives switching app tabs mid-run and restores its % on return, finishes
+  while another page has focus with review ready immediately, and the
+  keep-alive lifecycle holds (blessed by first tap, playing for the whole
+  run — across app tabs too — restarted by the watchdog after a forced
+  pause, stopped on finish and on Cancel, media-card metadata set and
+  cleared). True iOS suspension can't be reproduced in this container —
+  iPhone Safari remains the honest untested caveat.
 - The local caption engine was verified end to end in headless Chromium
   (espeak-generated test songs with known line times; word timestamps and
   the aligner checked against ground truth). Heads-up for future test rigs:
